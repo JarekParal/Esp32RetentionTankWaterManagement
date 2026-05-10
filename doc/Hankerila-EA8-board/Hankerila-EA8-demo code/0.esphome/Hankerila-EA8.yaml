@@ -1,0 +1,300 @@
+esphome:
+  # Name of the ESPHome device
+  name: ea8
+  # Friendly name for the device in Home Assistant
+  friendly_name: EA8
+
+esp32:
+  # Board type used, here it's esp32dev
+  board: esp32dev
+  framework:
+    # Using the Arduino framework
+    type: arduino
+
+# Enable the logging feature
+logger:
+
+# Enable the Home Assistant API with encryption
+api:
+  encryption:
+    # Encryption key for the API
+    key: "V2PYopxw7cgQx1qweCCV+xc2Tf+plookrSIFGAYwdDo="
+
+ota:
+  - platform: esphome
+    # Password for Over-the-Air updates
+    password: "691cd973151149e2a655ade218b2b590"
+
+# Example configuration entry for RMII chips
+ethernet:  # Ethernet configuration section
+  # The type of the Ethernet controller is LAN8720
+  type: LAN8720
+  # Define the MDC (Management Data Clock) pin as GPIO23
+  mdc_pin: GPIO23
+  # Define the MDIO (Management Data Input/Output) pin as GPIO18
+  mdio_pin: GPIO18
+  # The clock mode pin is GPIO17 and it's in output mode
+  clk_mode: GPIO17_OUT
+  # The address of the Ethernet PHY (Physical Layer)
+  phy_addr: 0
+
+  # Optional manual IP configuration
+  manual_ip:
+    # input your  IP address
+    static_ip: 192.168.50.190
+    # The gateway address
+    gateway: 192.168.50.1
+    # The subnet mask
+    subnet: 255.255.255.0
+
+# Configure the I2C bus
+i2c:
+  - id: bus_a
+    # SDA pin for the I2C bus
+    sda: GPIO4
+    # SCL pin for the I2C bus
+    scl: GPIO5
+    # Enable I2C device scanning
+    scan: true
+
+# Configure the MCP4725 DAC output
+output:
+  - platform: mcp4725
+    # I2C address of the MCP4725
+    address: 0x60
+    # Minimum output power
+    min_power: 0
+    # Maximum output power
+    max_power: 1
+    # ID for the output
+    id: dac_output
+    # I2C bus ID
+    i2c_id: bus_a
+
+# Configure the monochromatic light using the DAC output
+light:
+  - platform: monochromatic
+    # Name of the light in Home Assistant
+    name: "DAC1"
+    # ID for the light
+    id: dac1
+    # Output source for the light
+    output: dac_output
+
+# Configure the ADS1115 ADC
+ads1115:
+  - address: 0x48
+    # I2C bus ID
+    i2c_id: bus_a
+
+# Configure sensors connected to the ADS1115
+sensor:
+  - platform: ads1115
+    # Measure the voltage between A0 and A1
+    multiplexer: 'A0_A1'
+    # Gain setting for the ADC
+    gain: 6.144
+    # Name of the sensor in Home Assistant
+    name: "SCT013-30A-1V"
+    # Update interval for the sensor
+    update_interval: 3s
+
+  - platform: ads1115
+    # ID for the sensor
+    id: ads1115_02
+    # Measure the voltage between A2 and GND
+    multiplexer: 'A2_GND'
+    # Gain setting for the ADC
+    gain: 6.144
+    # Name of the sensor in Home Assistant
+    name: "0-5V"
+    # Update interval for the sensor
+    update_interval: 2s
+
+  - platform: ads1115
+    # ID for the raw voltage sensor
+    id: ads1115_03_raw
+    # Measure the voltage between A3 and GND
+    multiplexer: 'A3_GND'
+    # Gain setting for the ADC
+    gain: 6.144
+    # Update interval for the sensor
+    update_interval: 2s
+    # Set the sensor as internal, not visible in Home Assistant
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            // Sampling resistor value in ohms
+            const float sampling_resistor = 200.0;
+            // Convert voltage to current in milliamperes
+            float current = (id(ads1115_03_raw).state / sampling_resistor) * 1000;
+            // Publish the converted current value to the custom sensor
+            id(ads1115_03_current).publish_state(current);
+
+  - platform: template
+    # ID for the custom current sensor
+    id: ads1115_03_current
+    # Name of the sensor in Home Assistant
+    name: "0-20mA"
+    # Unit of measurement for the sensor
+    unit_of_measurement: "mA"
+    # Number of decimal places for the sensor value
+    accuracy_decimals: 2
+    # State class for the sensor
+    state_class: measurement
+
+# Configure the PCF8574 I/O expanders
+pcf8574:
+  - id: 'pcf8574_hub'
+    # I2C address of the PCF8574
+    address: 0x24
+    # I2C bus ID
+    i2c_id: bus_a
+  - id: 'pcf8574_in_hub'
+    # I2C address of the PCF8574
+    address: 0x26
+    # I2C bus ID
+    i2c_id: bus_a
+
+# Configure switches
+switch:
+  - platform: gpio
+    # Pin connected to the buzzer
+    pin: GPIO12
+    # Name of the switch in Home Assistant
+    name: "Buzzer"
+  - platform: gpio
+    # Name of the switch in Home Assistant
+    name: "light1"
+    # ID for the switch
+    id: 'relay01'
+    pin:
+      # PCF8574 hub ID
+      pcf8574: pcf8574_hub
+      # Pin number on the PCF8574
+      number: 0
+      # Pin mode, set as output
+      mode: OUTPUT
+      # Whether the pin is inverted
+      inverted: false
+  - platform: gpio
+    name: "light2"
+    id: 'relay02'
+    pin:
+      pcf8574: pcf8574_hub
+      number: 1
+      mode: OUTPUT
+      inverted: false
+  - platform: gpio
+    name: "light3"
+    id: 'relay03'
+    pin:
+      pcf8574: pcf8574_hub
+      number: 2
+      mode: OUTPUT
+      inverted: false
+  - platform: gpio
+    name: "light4"
+    id: 'relay04'
+    pin:
+      pcf8574: pcf8574_hub
+      number: 3
+      mode: OUTPUT
+      inverted: false
+  - platform: gpio
+    name: "light5"
+    id: 'relay05'
+    pin:
+      pcf8574: pcf8574_hub
+      number: 4
+      mode: OUTPUT
+      inverted: false
+  - platform: gpio
+    name: "light6"
+    id: 'relay06'
+    pin:
+      pcf8574: pcf8574_hub
+      number: 5
+      mode: OUTPUT
+      inverted: false
+  - platform: gpio
+    name: "light7"
+    id: 'relay07'
+    pin:
+      pcf8574: pcf8574_hub
+      number: 6
+      mode: OUTPUT
+      inverted: false
+  - platform: gpio
+    name: "light8"
+    id: 'relay08'
+    pin:
+      pcf8574: pcf8574_hub
+      number: 7
+      mode: OUTPUT
+      inverted: false
+
+# Configure binary sensors
+binary_sensor:
+  - platform: gpio
+    # Name of the binary sensor in Home Assistant
+    name: "INPUT_01"
+    pin:
+      # PCF8574 hub ID
+      pcf8574: pcf8574_in_hub
+      # Pin number on the PCF8574
+      number: 0
+      # Pin mode, set as input
+      mode: input
+      # Whether the pin is inverted
+      inverted: true
+  - platform: gpio
+    name: "INPUT_02"
+    pin:
+      pcf8574: pcf8574_in_hub
+      number: 1
+      mode: input
+      inverted: true
+  - platform: gpio
+    name: "INPUT_03"
+    pin:
+      pcf8574: pcf8574_in_hub
+      number: 2
+      mode: input
+      inverted: true
+  - platform: gpio
+    name: "INPUT_04"
+    pin:
+      pcf8574: pcf8574_in_hub
+      number: 3
+      mode: input
+      inverted: true
+  - platform: gpio
+    name: "INPUT_05"
+    pin:
+      pcf8574: pcf8574_in_hub
+      number: 4
+      mode: input
+      inverted: true
+  - platform: gpio
+    name: "INPUT_06"
+    pin:
+      pcf8574: pcf8574_in_hub
+      number: 5
+      mode: input
+      inverted: true
+  - platform: gpio
+    name: "INPUT_07"
+    pin:
+      pcf8574: pcf8574_in_hub
+      number: 6
+      mode: input
+      inverted: true
+  - platform: gpio
+    name: "INPUT_08"
+    pin:
+      pcf8574: pcf8574_in_hub
+      number: 7
+      mode: input
+      inverted: true
