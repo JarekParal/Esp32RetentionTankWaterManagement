@@ -180,135 +180,19 @@ static void server_handle_sw_legacy()
   server.send(200, "text/plain", "OK");
 }
 
-// Self-contained UI: CSS + JS inline, no external resources.
-static const char PAGE_HTML[] PROGMEM = R"HTML(<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Retention Tank</title>
-<style>
-:root{--bg:#0f1419;--panel:#1a1f26;--panel2:#222831;--border:#2a3441;--text:#e6e9ee;--muted:#8a96a8;--accent:#3b82f6;--ok:#10b981;--off:#475569}
-@media(prefers-color-scheme:light){:root{--bg:#f6f7f9;--panel:#fff;--panel2:#f1f3f6;--border:#e4e7eb;--text:#0f172a;--muted:#64748b;--accent:#2563eb;--ok:#16a34a;--off:#94a3b8}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
-header.top{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap;gap:10px}
-header.top h1{margin:0;font-size:18px;font-weight:600}
-.metrics{display:flex;gap:18px;font-size:13px}
-.metric{display:flex;flex-direction:column;align-items:flex-end}
-.metric label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
-.metric strong{font-size:15px;font-variant-numeric:tabular-nums}
-main{max-width:1100px;margin:0 auto;padding:20px;display:grid;grid-template-columns:1fr;gap:20px}
-@media(min-width:900px){main{grid-template-columns:1fr 1fr}}
-section{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px}
-section>h2{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.valve-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
-.valve{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:12px;display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:border-color .15s,background .15s,opacity .15s;user-select:none}
-.valve:hover{border-color:var(--accent)}
-.valve.open{background:color-mix(in srgb,var(--ok) 18%,var(--panel2));border-color:var(--ok)}
-.valve .name{font-weight:600;font-size:13px}
-.valve .status{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.valve.open .status{color:var(--ok)}
-.valve .toggle{align-self:flex-end;width:36px;height:20px;background:var(--off);border-radius:11px;position:relative;transition:background .15s;flex-shrink:0}
-.valve .toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:transform .15s}
-.valve.open .toggle{background:var(--ok)}
-.valve.open .toggle::after{transform:translateX(16px)}
-.valve.pending{opacity:.55;pointer-events:none}
-.term-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.term-head h2{margin:0;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.term-head button{background:transparent;border:1px solid var(--border);color:var(--muted);font:inherit;font-size:12px;padding:4px 10px;border-radius:4px;cursor:pointer}
-.term-head button:hover{color:var(--text);border-color:var(--accent)}
-.term-head button.danger:hover{color:#fff;border-color:#ef4444;background:#ef4444}
-#terminal{margin:0;background:#000;color:#cfe;border:1px solid var(--border);border-radius:6px;padding:12px;height:340px;overflow-y:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
-#terminal:empty::before{content:"(no log lines yet)";color:#556}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--off);margin-left:6px;vertical-align:middle;transition:background .2s}
-.dot.live{background:var(--ok);box-shadow:0 0 6px var(--ok)}
-</style>
-</head>
-<body>
-<header class="top">
-  <h1>Retention Tank<span id="conn" class="dot" title="connection"></span></h1>
-  <div class="metrics">
-    <div class="metric"><label>Tank distance</label><strong id="distance">&mdash;</strong></div>
-    <div class="metric"><label>Uptime</label><strong id="uptime">&mdash;</strong></div>
-  </div>
-</header>
-<main>
-  <section>
-    <div class="term-head"><h2>Solenoid Valves</h2><button id="closeAll" class="danger">Close all</button></div>
-    <div id="valves" class="valve-grid"></div>
-  </section>
-  <section>
-    <div class="term-head"><h2>Device Log</h2><button id="clearLog">Clear</button></div>
-    <pre id="terminal"></pre>
-  </section>
-</main>
-<script>
-(()=>{
-  const N=8;
-  let lastSeq=0, relays=0, paused=false, pending=new Set();
-  const $v=document.getElementById('valves'), $t=document.getElementById('terminal'),
-        $d=document.getElementById('distance'), $u=document.getElementById('uptime'),
-        $c=document.getElementById('conn');
-  const fmtUp=ms=>{const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60);
-    return (h?h+'h ':'')+((h||m)?m+'m ':'')+(s%60)+'s';};
-  function render(){
-    $v.innerHTML='';
-    for(let i=0;i<N;i++){
-      const open=!!(relays&(1<<i));
-      const el=document.createElement('div');
-      el.className='valve'+(open?' open':'')+(pending.has(i+1)?' pending':'');
-      el.dataset.n=i+1;
-      el.innerHTML='<div class="name">Valve '+(i+1)+'</div><div class="status">'+(open?'Open':'Closed')+'</div><div class="toggle"></div>';
-      el.addEventListener('click',()=>toggle(i+1,!open));
-      $v.appendChild(el);
-    }
-  }
-  async function toggle(n,on){
-    pending.add(n); render();
-    try{
-      const r=await fetch('/sw?n='+n+'&on='+(on?1:0));
-      const j=await r.json();
-      if(typeof j.relays==='number') relays=j.relays;
-    }catch(e){}
-    pending.delete(n); render();
-  }
-  function appendLines(lines){
-    if(!lines||!lines.length) return;
-    const atBottom=$t.scrollHeight-$t.scrollTop-$t.clientHeight<30;
-    for(const l of lines) $t.appendChild(document.createTextNode(l+'\n'));
-    if(atBottom) $t.scrollTop=$t.scrollHeight;
-  }
-  async function poll(){
-    if(paused) return;
-    try{
-      const r=await fetch('/poll?since='+lastSeq);
-      if(!r.ok) throw 0;
-      const j=await r.json();
-      $c.classList.add('live');
-      if(j.seq!==undefined) lastSeq=j.seq;
-      if(typeof j.relays==='number'&&j.relays!==relays){relays=j.relays;render();}
-      if(j.distance_cm!==undefined) $d.textContent=j.distance_cm.toFixed(1)+' cm';
-      if(j.uptime_ms!==undefined) $u.textContent=fmtUp(j.uptime_ms);
-      appendLines(j.lines);
-    }catch(e){$c.classList.remove('live');}
-  }
-  document.getElementById('clearLog').addEventListener('click',()=>{$t.textContent='';});
-  document.getElementById('closeAll').addEventListener('click',async()=>{
-    try{const r=await fetch('/closeall');const j=await r.json();
-      if(typeof j.relays==='number'){relays=j.relays;render();}}catch(e){}
-  });
-  document.addEventListener('visibilitychange',()=>{paused=document.hidden;});
-  render(); poll(); setInterval(poll,750);
-})();
-</script>
-</body>
-</html>
-)HTML";
+// UI is held in web/index.html and embedded into the firmware via
+// platformio.ini's board_build.embed_txtfiles. The IDF build system exposes
+// _binary_<path>_start / _end symbols (slashes and dots become underscores).
+extern const uint8_t INDEX_HTML_START[] asm("_binary_web_index_html_start");
+extern const uint8_t INDEX_HTML_END[]   asm("_binary_web_index_html_end");
 
 static void server_handle_root()
 {
-  server.send_P(200, "text/html", PAGE_HTML);
+  // _end - _start is the file size; embed_txtfiles also appends a NUL, so
+  // subtract one to avoid sending it as part of the body.
+  size_t len = (INDEX_HTML_END - INDEX_HTML_START);
+  if (len > 0 && INDEX_HTML_START[len - 1] == 0) len -= 1;
+  server.send_P(200, "text/html", (PGM_P)INDEX_HTML_START, len);
 }
 
 void setup()
