@@ -14,6 +14,7 @@ constexpr int ULTRASOUND_ECHO_PIN = 16;   // TX on connector
 #define ETH_MDC_PIN 23           // Define the Ethernet MDIO pin
 #define ETH_MDIO_PIN 18          // Define the Ethernet type
 #define ETH_TYPE ETH_PHY_LAN8720 // Define the Ethernet clock mode
+#undef ETH_CLK_MODE              // ETH.h defaults to ETH_CLOCK_GPIO0_IN; this board uses GPIO17 OUT
 #define ETH_CLK_MODE ETH_CLOCK_GPIO17_OUT
 
 IPAddress local_ip(uint32_t(0)); // 0 => Use DNS IP address
