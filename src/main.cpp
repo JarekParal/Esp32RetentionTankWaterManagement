@@ -158,6 +158,17 @@ static void server_handle_sw()
   server.send(200, "application/json", j);
 }
 
+static void server_handle_closeall()
+{
+  for (int i = 1; i <= 8; i++) set_valve(i, false);
+  String j;
+  j.reserve(24);
+  j += "{\"relays\":";
+  j += relay_mask;
+  j += "}";
+  server.send(200, "application/json", j);
+}
+
 // Back-compat: GET /SW?LED=onN | offN
 static void server_handle_sw_legacy()
 {
@@ -207,6 +218,7 @@ section>h2{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);tex
 .term-head h2{margin:0;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .term-head button{background:transparent;border:1px solid var(--border);color:var(--muted);font:inherit;font-size:12px;padding:4px 10px;border-radius:4px;cursor:pointer}
 .term-head button:hover{color:var(--text);border-color:var(--accent)}
+.term-head button.danger:hover{color:#fff;border-color:#ef4444;background:#ef4444}
 #terminal{margin:0;background:#000;color:#cfe;border:1px solid var(--border);border-radius:6px;padding:12px;height:340px;overflow-y:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
 #terminal:empty::before{content:"(no log lines yet)";color:#556}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--off);margin-left:6px;vertical-align:middle;transition:background .2s}
@@ -223,7 +235,7 @@ section>h2{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);tex
 </header>
 <main>
   <section>
-    <h2>Solenoid Valves</h2>
+    <div class="term-head"><h2>Solenoid Valves</h2><button id="closeAll" class="danger">Close all</button></div>
     <div id="valves" class="valve-grid"></div>
   </section>
   <section>
@@ -282,6 +294,10 @@ section>h2{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);tex
     }catch(e){$c.classList.remove('live');}
   }
   document.getElementById('clearLog').addEventListener('click',()=>{$t.textContent='';});
+  document.getElementById('closeAll').addEventListener('click',async()=>{
+    try{const r=await fetch('/closeall');const j=await r.json();
+      if(typeof j.relays==='number'){relays=j.relays;render();}}catch(e){}
+  });
   document.addEventListener('visibilitychange',()=>{paused=document.hidden;});
   render(); poll(); setInterval(poll,750);
 })();
@@ -321,6 +337,7 @@ void setup()
 
   server.on("/", server_handle_root);
   server.on("/sw", server_handle_sw);
+  server.on("/closeall", server_handle_closeall);
   server.on("/poll", server_handle_poll);
   server.on("/SW", server_handle_sw_legacy); // back-compat
   server.begin();
