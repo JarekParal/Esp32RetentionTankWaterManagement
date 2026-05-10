@@ -3,6 +3,7 @@
 /*set your IP address and input the IP can open the webpage to control the relays*/
 #include <ETH.h>
 #include <WebServer.h>
+#include <ArduinoOTA.h>
 #include <PCF8574.h>
 
 constexpr int ULTRASOUND_TRIGER_PIN = 15; // RX on connector
@@ -71,10 +72,23 @@ void setup()
   server.on("/SW", server_handle_sw);
   server.begin();
   Serial.println("Web server started");
+
+  // ArduinoOTA: upload firmware over the network using `pio run -e nodemcu-32s-ota -t upload`.
+  ArduinoOTA.setHostname("retention-tank");
+  // ArduinoOTA.setPassword("change-me"); // uncomment and set in upload_flags --auth=
+  ArduinoOTA.onStart([]() { Serial.println("OTA: start"); });
+  ArduinoOTA.onEnd([]() { Serial.println("\nOTA: end"); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("OTA: %u%%\r", total ? (progress * 100u) / total : 0u);
+  });
+  ArduinoOTA.onError([](ota_error_t error) { Serial.printf("OTA error: %u\n", error); });
+  ArduinoOTA.begin();
+  Serial.println("OTA ready");
 }
 
 void loop()
 {
+  ArduinoOTA.handle();
   server.handleClient();
 
   // const float distanceCm = get_distance_cm_from_ultrasound_sensor();
