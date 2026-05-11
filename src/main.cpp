@@ -12,7 +12,8 @@
 #include <WebServer.h>
 #include <ArduinoOTA.h>
 #include <PCF8574.h>
-#include <stdarg.h>
+
+#include "log_buffer.h"
 
 constexpr int ULTRASOUND_TRIGER_PIN = 15; // RX on connector
 constexpr int ULTRASOUND_ECHO_PIN = 16;   // TX on connector
@@ -33,54 +34,33 @@ IPAddress dns(192, 168, 1, 1);
 WebServer server(80);
 PCF8574 pcf8574_re(0x24, 4, 5);
 
-// ---------------- Log ring buffer ----------------
-constexpr size_t LOG_LINE_LEN = 96;
-constexpr size_t LOG_BUF_LINES = 64;
-static char log_buf[LOG_BUF_LINES][LOG_LINE_LEN];
-static uint32_t log_seq = 0; // next slot index; line at slot ((seq-1) % LOG_BUF_LINES) is most recent
-
-static void wlog_println(const char *msg)
-{
-  Serial.println(msg);
-  size_t len = strlen(msg);
-  if (len >= LOG_LINE_LEN) len = LOG_LINE_LEN - 1;
-  size_t slot = log_seq % LOG_BUF_LINES;
-  memcpy(log_buf[slot], msg, len);
-  log_buf[slot][len] = '\0';
-  log_seq++;
-}
-
-static void wlog_println(const String &msg) { wlog_println(msg.c_str()); }
-
-static void wlog_printf(const char *fmt, ...)
-{
-  char tmp[LOG_LINE_LEN];
-  va_list ap;
-  va_start(ap, fmt);
-  vsnprintf(tmp, sizeof(tmp), fmt, ap);
-  va_end(ap);
-  wlog_println(tmp);
-}
-
 // ---------------- Valve state ----------------
 // bit i = valve (i+1) is OPEN. PCF8574 is active-low: write 0 to OPEN, 1 to CLOSE.
 static uint8_t relay_mask = 0;
 
+/// @brief Drive a single valve to open or closed and log the transition.
+/// @param n    1-based valve index (1..8); out-of-range calls are ignored.
+/// @param open `true` to open the valve, `false` to close it.
+/// @note PCF8574 is active-low — this function inverts the level so callers
+///       can think in terms of OPEN / CLOSED.
 static void set_valve(int n, bool open)
 {
   if (n < 1 || n > 8) return;
   uint8_t bit = 1u << (n - 1);
-  bool was = relay_mask & bit;
+  bool was = (relay_mask & bit) != 0;
   if (open) relay_mask |= bit; else relay_mask &= ~bit;
   pcf8574_re.digitalWrite(n - 1, open ? 0 : 1);
   if (was != open) wlog_printf("Valve %d -> %s", n, open ? "OPEN" : "CLOSED");
 }
 
 // ---------------- Ultrasonic (cached) ----------------
-static volatile float cached_distance_cm = 0.0f;
+static float cached_distance_cm = 0.0f;
 static unsigned long last_distance_ms = 0;
 constexpr unsigned long DISTANCE_REFRESH_MS = 1000;
 
+/// @brief Trigger the HC-SR04 and convert the echo pulse to centimeters.
+/// @return Measured distance in cm; 0.0 on echo timeout (~5 m range).
+/// @note Blocking — pulseIn() can stall up to 30 ms while waiting for the echo.
 static float read_distance_cm()
 {
   constexpr float SOUND_SPEED = 0.034f;
@@ -94,6 +74,12 @@ static float read_distance_cm()
 }
 
 // ---------------- HTTP handlers ----------------
+
+/// @brief Append @p s to @p out with JSON string escaping applied.
+/// @param out Destination buffer; escaped characters are appended in place.
+/// @param s   NUL-terminated source string. Control characters below 0x20
+///            are emitted as `\u00XX`; quote, backslash, newline, carriage
+///            return, and tab use their short escape forms.
 static void json_escape_into(String &out, const char *s)
 {
   for (const char *p = s; *p; p++) {
@@ -107,17 +93,27 @@ static void json_escape_into(String &out, const char *s)
   }
 }
 
+/// @brief `GET /poll?since=<seq>` — state snapshot plus new log lines.
+///
+/// Returns a JSON object with the latest seq, relay mask, distance, uptime,
+/// and any log lines with seq in `[since, current_seq)`. Seq numbers are
+/// monotonic; if @c since is older than the ring buffer still retains it is
+/// clamped forward to wlog_oldest_seq(), and the gap of overwritten lines
+/// is lost — the client stays in sync via the returned `"seq"` field.
 static void server_handle_poll()
 {
-  uint32_t since = (uint32_t)server.arg("since").toInt();
-  uint32_t oldest = (log_seq > LOG_BUF_LINES) ? (log_seq - LOG_BUF_LINES) : 0;
-  uint32_t from = (since < oldest) ? oldest : since;
-  if (from > log_seq) from = log_seq;
+  uint32_t since       = (uint32_t)server.arg("since").toInt();
+  uint32_t current_seq = wlog_seq();
+  uint32_t oldest_seq  = wlog_oldest_seq();
+
+  // Clamp the replay window to what the ring buffer actually still holds.
+  uint32_t start_seq = (since < oldest_seq) ? oldest_seq : since;
+  if (start_seq > current_seq) start_seq = current_seq;
 
   String json;
   json.reserve(1024);
   json += "{\"seq\":";
-  json += log_seq;
+  json += current_seq;
   json += ",\"relays\":";
   json += relay_mask;
   json += ",\"distance_cm\":";
@@ -126,17 +122,21 @@ static void server_handle_poll()
   json += millis();
   json += ",\"lines\":[";
   bool first = true;
-  for (uint32_t i = from; i < log_seq; i++) {
+  for (uint32_t s = start_seq; s < current_seq; s++) {
     if (!first) json += ',';
     first = false;
     json += '"';
-    json_escape_into(json, log_buf[i % LOG_BUF_LINES]);
+    json_escape_into(json, wlog_line_at(s));
     json += '"';
   }
   json += "]}";
   server.send(200, "application/json", json);
 }
 
+/// @brief `GET /sw?n=<1..8>&on=<0|1>` — set one valve, return new state.
+///
+/// Responds with `{"n":..,"on":..,"relays":..}` on success, or HTTP 400 with
+/// `{"error":"invalid n"}` if @c n is out of range.
 static void server_handle_sw()
 {
   int n = server.arg("n").toInt();
@@ -158,6 +158,7 @@ static void server_handle_sw()
   server.send(200, "application/json", j);
 }
 
+/// @brief `GET /closeall` — close every valve and return the new relay mask.
 static void server_handle_closeall()
 {
   for (int i = 1; i <= 8; i++) set_valve(i, false);
@@ -169,7 +170,9 @@ static void server_handle_closeall()
   server.send(200, "application/json", j);
 }
 
-// Back-compat: GET /SW?LED=onN | offN
+/// @brief `GET /SW?LED=onN|offN` — legacy single-valve endpoint.
+/// @note Kept for backwards compatibility with the original demo UI; new
+///       clients should use /sw with `n` and `on` query parameters.
 static void server_handle_sw_legacy()
 {
   String state = server.arg("LED");
@@ -186,6 +189,7 @@ static void server_handle_sw_legacy()
 extern const uint8_t INDEX_HTML_START[] asm("_binary_web_index_html_start");
 extern const uint8_t INDEX_HTML_END[]   asm("_binary_web_index_html_end");
 
+/// @brief `GET /` — serve the web UI from the flash blob embedded by PlatformIO.
 static void server_handle_root()
 {
   // _end - _start is the file size; embed_txtfiles also appends a NUL, so
@@ -195,6 +199,7 @@ static void server_handle_root()
   server.send_P(200, "text/html", (PGM_P)INDEX_HTML_START, len);
 }
 
+/// @brief Arduino entry point: initialize GPIO, Ethernet, HTTP, and OTA.
 void setup()
 {
   pinMode(ULTRASOUND_TRIGER_PIN, OUTPUT);
@@ -214,6 +219,8 @@ void setup()
   delay(1000);
   wlog_printf("ETH IP: %s", ETH.localIP().toString().c_str());
 
+  // xreef/PCF8574 queues pinMode() calls and applies them inside begin();
+  // pinMode-before-begin is the library's required order, not the usual Arduino pattern.
   for (int i = 0; i < 8; i++) pcf8574_re.pinMode(i, OUTPUT);
   pcf8574_re.begin();
   for (int i = 0; i < 8; i++) pcf8574_re.digitalWrite(i, 1); // all valves CLOSED
@@ -241,6 +248,7 @@ void setup()
   wlog_println("OTA ready");
 }
 
+/// @brief Arduino main loop: pump OTA, HTTP, and refresh the cached distance.
 void loop()
 {
   ArduinoOTA.handle();

@@ -45,6 +45,12 @@ HTTP surface (port 80, single-threaded `WebServer`):
 - `GET /` — relay control HTML + live ultrasonic distance
 - `GET /SW?LED=on1..on8` / `off1..off8` — toggle a single relay
 
+## Code style
+
+- **Doxygen `///` for public APIs.** Headers carry the contract (`@brief`, `@param`, `@return`, preconditions, lifetime caveats); `.cpp` files stay clean and don't repeat it. See [src/log_buffer.h](src/log_buffer.h) for the pattern.
+- **Top-level functions in `main.cpp` get a `///` block.** HTTP handlers state their URL and response shape in the `@brief`.
+- **Default to no inline `//` comments.** Add one only when the *why* is non-obvious — library quirk, hardware contract, or workaround.
+
 ## Reference material
 
 [doc/Hankerila-EA8-board/](doc/Hankerila-EA8-board/) contains the vendor's product introduction PDFs, schematics (V1 and V3), and **all the original demo sketches** for this exact board (BEEP, RS485, IR send/receive, SHT31, DS18B20, DAC 0–10V, analog 0–5V, MODBUS power meter, ESPHome YAML, etc.). When adding a new peripheral, copy the pin map and init pattern from the matching numbered demo folder rather than rediscovering it — that's the vendor-validated wiring for this hardware revision.
