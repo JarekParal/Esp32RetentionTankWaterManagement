@@ -14,6 +14,7 @@
 #include <PCF8574.h>
 
 #include "log_buffer.h"
+#include "util.h"
 
 constexpr int ULTRASOUND_TRIGER_PIN = 15; // RX on connector
 constexpr int ULTRASOUND_ECHO_PIN = 16;   // TX on connector
@@ -120,7 +121,9 @@ static void server_handle_poll()
   json += String(cached_distance_cm, 1);
   json += ",\"uptime_ms\":";
   json += millis();
-  json += ",\"lines\":[";
+  json += ",\"version\":\"";
+  json_escape_into(json, util_version_string());
+  json += "\",\"lines\":[";
   bool first = true;
   for (uint32_t s = start_seq; s < current_seq; s++) {
     if (!first) json += ',';
@@ -218,6 +221,9 @@ void setup()
 
   delay(1000);
   wlog_printf("ETH IP: %s", ETH.localIP().toString().c_str());
+
+  util_init_time();
+  wlog_printf("Firmware: %s", util_version_string());
 
   // xreef/PCF8574 queues pinMode() calls and applies them inside begin();
   // pinMode-before-begin is the library's required order, not the usual Arduino pattern.

@@ -1,6 +1,9 @@
 #include "log_buffer.h"
 
+#include "util.h"
+
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 /// Maximum length of a single log line in bytes, including the NUL
@@ -23,12 +26,15 @@ static uint32_t g_log_seq = 0;
 
 void wlog_println(const char *msg)
 {
+  char ts[24];
+  util_format_timestamp(ts, sizeof(ts));
+
+  Serial.print(ts);
+  Serial.print(' ');
   Serial.println(msg);
-  size_t len = strlen(msg);
-  if (len >= LOG_LINE_LEN) len = LOG_LINE_LEN - 1;
+
   size_t slot = g_log_seq % LOG_BUF_LINES;
-  memcpy(log_buf[slot], msg, len);
-  log_buf[slot][len] = '\0';
+  snprintf(log_buf[slot], LOG_LINE_LEN, "%s %s", ts, msg);
   g_log_seq++;
 }
 
