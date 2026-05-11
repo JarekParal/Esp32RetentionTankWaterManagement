@@ -15,6 +15,7 @@
 
 #include "log_buffer.h"
 #include "util.h"
+#include "history.h"
 
 constexpr int ULTRASOUND_TRIGER_PIN = 15; // RX on connector
 constexpr int ULTRASOUND_ECHO_PIN = 16;   // TX on connector
@@ -58,6 +59,13 @@ static void set_valve(int n, bool open)
 static float cached_distance_cm = 0.0f;
 static unsigned long last_distance_ms = 0;
 constexpr unsigned long DISTANCE_REFRESH_MS = 1000;
+
+// 10-min × 144 short ring = 24 h, throttled to one NVS write per hour.
+// 1-day × 30 long ring = 30 d, one NVS write per daily rollover (~1/day).
+static History distance_history(
+  "dist",
+  History::RingConfig{ /*period_sec=*/ 600,   /*slot_count=*/ 144, /*min_persist_sec=*/ 3600 },
+  History::RingConfig{ /*period_sec=*/ 86400, /*slot_count=*/ 30,  /*min_persist_sec=*/ 0 });
 
 /// @brief Trigger the HC-SR04 and convert the echo pulse to centimeters.
 /// @return Measured distance in cm; 0.0 on echo timeout (~5 m range).
@@ -221,6 +229,22 @@ static void server_handle_config()
   send_embedded(CONFIG_JSON_START, CONFIG_JSON_END, "application/json");
 }
 
+/// @brief `GET /history.json` — multi-signal min/avg/max history.
+///
+/// Returns `{"distance":{"short":...,"long":...}}`. Each ring is
+/// `{"period_sec":N,"buckets":[{"t":..,"min":..,"avg":..,"max":..,"n":..}, ...]}`;
+/// empty slots collapse to `{"t":..,"n":0}`. Persisted to NVS, so the series
+/// survives reboots.
+static void server_handle_history()
+{
+  String json;
+  json.reserve(12 * 1024);
+  json += "{\"distance\":";
+  distance_history.serialize(json);
+  json += '}';
+  server.send(200, "application/json", json);
+}
+
 /// @brief Arduino entry point: initialize GPIO, Ethernet, HTTP, and OTA.
 void setup()
 {
@@ -244,6 +268,8 @@ void setup()
   util_init_time();
   wlog_printf("Firmware: %s", util_version_string());
 
+  distance_history.begin();
+
   // xreef/PCF8574 queues pinMode() calls and applies them inside begin();
   // pinMode-before-begin is the library's required order, not the usual Arduino pattern.
   for (int i = 0; i < 8; i++) pcf8574_re.pinMode(i, OUTPUT);
@@ -253,6 +279,7 @@ void setup()
 
   server.on("/", server_handle_root);
   server.on("/config.json", server_handle_config);
+  server.on("/history.json", server_handle_history);
   server.on("/sw", server_handle_sw);
   server.on("/closeall", server_handle_closeall);
   server.on("/poll", server_handle_poll);
@@ -284,5 +311,8 @@ void loop()
   if (now - last_distance_ms >= DISTANCE_REFRESH_MS) {
     cached_distance_cm = read_distance_cm();
     last_distance_ms = now;
+    if (cached_distance_cm > 0.0f) {
+      distance_history.record(time(nullptr), cached_distance_cm);
+    }
   }
 }

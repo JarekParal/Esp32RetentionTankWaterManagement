@@ -242,6 +242,43 @@
       background: var(--ok);
       box-shadow: 0 0 6px var(--ok);
     }
+
+    section.history { grid-column: 1 / -1; }
+    .history-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    @media (min-width: 700px) {
+      .history-grid { grid-template-columns: 1fr 1fr; }
+    }
+    .chart-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      margin-bottom: 6px;
+    }
+    .chart-title .range {
+      font-variant-numeric: tabular-nums;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .chart {
+      display: block;
+      width: 100%;
+      height: 110px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+    .chart-range  { stroke: var(--muted); stroke-width: 0.6; opacity: 0.45; }
+    .chart-line   { fill: none; stroke: var(--accent); stroke-width: 1; }
+    .chart-dot    { fill: var(--accent); }
+    .chart-empty  { fill: var(--muted); font-size: 5px; }
   </style>
 </head>
 <body>
@@ -252,8 +289,8 @@
     </div>
     <div class="metrics">
       <div class="metric">
-        <label>Tank distance</label>
-        <strong id="distance">&mdash;</strong>
+        <label id="level-label">Tank distance</label>
+        <strong id="level">&mdash;</strong>
       </div>
       <div class="metric">
         <label>Uptime</label>
@@ -263,6 +300,26 @@
   </header>
 
   <main>
+    <section class="history">
+      <h2>Tank Distance</h2>
+      <div class="history-grid">
+        <div>
+          <div class="chart-title">
+            <span id="window-24h">Last 24 hours</span>
+            <span class="range" id="range-24h">&mdash;</span>
+          </div>
+          <svg id="chart-24h" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+        </div>
+        <div>
+          <div class="chart-title">
+            <span id="window-30d">Last 30 days</span>
+            <span class="range" id="range-30d">&mdash;</span>
+          </div>
+          <svg id="chart-30d" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+    </section>
+
     <section>
       <div class="term-head">
         <h2>Solenoid Valves</h2>
@@ -284,6 +341,8 @@
     (() => {
       const VALVE_COUNT = 8;
       const POLL_INTERVAL_MS = 750;
+      const HISTORY_POLL_MS = 30000;
+      const SVG_NS = 'http://www.w3.org/2000/svg';
 
       let lastSeq = 0;
       let relays = 0;
@@ -292,14 +351,22 @@
       let valveLabels = Array.from({ length: VALVE_COUNT }, (_, i) => ({
         name: `Valve ${i + 1}`, note: '',
       }));
+      let tankCal = null;  // { empty_cm, full_cm } after loadConfig if set
 
       const $valves = document.getElementById('valves');
       const $terminal = document.getElementById('terminal');
-      const $distance = document.getElementById('distance');
+      const $level = document.getElementById('level');
+      const $levelLabel = document.getElementById('level-label');
       const $uptime = document.getElementById('uptime');
       const $conn = document.getElementById('conn');
       const $version = document.getElementById('version');
       const $title = document.getElementById('title');
+      const $chart24h = document.getElementById('chart-24h');
+      const $chart30d = document.getElementById('chart-30d');
+      const $range24h = document.getElementById('range-24h');
+      const $range30d = document.getElementById('range-30d');
+      const $window24h = document.getElementById('window-24h');
+      const $window30d = document.getElementById('window-30d');
 
       function escapeHtml(s) {
         return String(s)
@@ -326,7 +393,33 @@
               if (typeof v.note === 'string')          valveLabels[i].note = v.note;
             }
           }
+          if (cfg.tank && Number.isFinite(cfg.tank.empty_distance_cm)
+                       && Number.isFinite(cfg.tank.full_distance_cm)
+                       && cfg.tank.empty_distance_cm > cfg.tank.full_distance_cm) {
+            tankCal = { empty_cm: cfg.tank.empty_distance_cm, full_cm: cfg.tank.full_distance_cm };
+            $levelLabel.textContent = 'Tank level';
+          }
         } catch (_e) { /* fall back to defaults */ }
+      }
+
+      function distanceToFullness(cm) {
+        if (!tankCal) return null;
+        const range = tankCal.empty_cm - tankCal.full_cm;
+        const pct = (tankCal.empty_cm - cm) / range * 100;
+        return Math.max(0, Math.min(100, pct));
+      }
+
+      function formatLevel(cm) {
+        if (!Number.isFinite(cm)) return '—';
+        const pct = distanceToFullness(cm);
+        return pct !== null ? `${pct.toFixed(0)} %` : `${cm.toFixed(1)} cm`;
+      }
+
+      function describeWindow(periodSec, count) {
+        const total = periodSec * count;
+        if (total >= 86400 * 1.5) return `Last ${Math.round(total / 86400)} days`;
+        if (total >= 3600)        return `Last ${Math.round(total / 3600)} hours`;
+        return `Last ${Math.round(total / 60)} min`;
       }
 
       function formatUptime(ms) {
@@ -407,7 +500,7 @@
             render();
           }
           if (json.distance_cm !== undefined) {
-            $distance.textContent = `${json.distance_cm.toFixed(1)} cm`;
+            $level.textContent = formatLevel(json.distance_cm);
           }
           if (json.uptime_ms !== undefined) {
             $uptime.textContent = formatUptime(json.uptime_ms);
@@ -419,6 +512,122 @@
         } catch (_e) {
           $conn.classList.remove('live');
         }
+      }
+
+      function renderChart(svg, $range, $window, ring, transform, unit) {
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        if (!ring || !Array.isArray(ring.buckets)) return;
+        $window.textContent = describeWindow(ring.period_sec, ring.buckets.length);
+
+        // Project a bucket to the display unit; min/max may swap if transform
+        // is inverse-monotonic (cm → fullness %).
+        const project = b => {
+          const a = transform(b.avg);
+          const lo1 = transform(b.min), lo2 = transform(b.max);
+          return { avg: a, lo: Math.min(lo1, lo2), hi: Math.max(lo1, lo2), n: b.n, t: b.t,
+                   rawMin: b.min, rawMax: b.max, rawAvg: b.avg };
+        };
+
+        const filled = ring.buckets.filter(b => b && b.n > 0).map(project);
+        if (filled.length === 0) {
+          const t = document.createElementNS(SVG_NS, 'text');
+          t.setAttribute('x', '50%');
+          t.setAttribute('y', '50%');
+          t.setAttribute('text-anchor', 'middle');
+          t.setAttribute('dominant-baseline', 'middle');
+          t.setAttribute('class', 'chart-empty');
+          t.textContent = 'No data yet';
+          svg.appendChild(t);
+          $range.textContent = '—';
+          return;
+        }
+
+        let yMin = Infinity, yMax = -Infinity;
+        for (const b of filled) {
+          if (b.lo < yMin) yMin = b.lo;
+          if (b.hi > yMax) yMax = b.hi;
+        }
+        $range.textContent = `${yMin.toFixed(1)} – ${yMax.toFixed(1)} ${unit}`;
+        const yPad = Math.max((yMax - yMin) * 0.08, 0.2);
+        yMin -= yPad; yMax += yPad;
+        const yScale = yMax - yMin || 1;
+
+        const vbW = 240, vbH = 80;
+        const padX = 3, padY = 4;
+        const w = vbW - padX * 2;
+        const h = vbH - padY * 2;
+        const cellW = w / ring.buckets.length;
+        const yPos = v => padY + h * (1 - (v - yMin) / yScale);
+        const periodSec = ring.period_sec;
+
+        // First pass — min/max range bars.
+        for (let i = 0; i < ring.buckets.length; i++) {
+          const raw = ring.buckets[i];
+          if (!raw || raw.n === 0) continue;
+          const b = project(raw);
+          const x = padX + i * cellW + cellW / 2;
+          const line = document.createElementNS(SVG_NS, 'line');
+          line.setAttribute('x1', x.toFixed(2));
+          line.setAttribute('x2', x.toFixed(2));
+          line.setAttribute('y1', yPos(b.hi).toFixed(2));
+          line.setAttribute('y2', yPos(b.lo).toFixed(2));
+          line.setAttribute('class', 'chart-range');
+          svg.appendChild(line);
+        }
+
+        // Second pass — avg polyline.
+        const pts = [];
+        for (let i = 0; i < ring.buckets.length; i++) {
+          const raw = ring.buckets[i];
+          if (!raw || raw.n === 0) continue;
+          const b = project(raw);
+          const x = padX + i * cellW + cellW / 2;
+          pts.push(`${x.toFixed(2)},${yPos(b.avg).toFixed(2)}`);
+        }
+        if (pts.length > 1) {
+          const poly = document.createElementNS(SVG_NS, 'polyline');
+          poly.setAttribute('points', pts.join(' '));
+          poly.setAttribute('class', 'chart-line');
+          svg.appendChild(poly);
+        }
+
+        // Third pass — avg dots with tooltips.
+        for (let i = 0; i < ring.buckets.length; i++) {
+          const raw = ring.buckets[i];
+          if (!raw || raw.n === 0) continue;
+          const b = project(raw);
+          const x = padX + i * cellW + cellW / 2;
+          const c = document.createElementNS(SVG_NS, 'circle');
+          c.setAttribute('cx', x.toFixed(2));
+          c.setAttribute('cy', yPos(b.avg).toFixed(2));
+          c.setAttribute('r', '0.8');
+          c.setAttribute('class', 'chart-dot');
+
+          const date = new Date(b.t * 1000);
+          const label = periodSec >= 86400
+            ? date.toLocaleDateString()
+            : date.toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+          const title = document.createElementNS(SVG_NS, 'title');
+          title.textContent =
+            `${label}: avg ${b.avg.toFixed(1)} ${unit}` +
+            ` (min ${b.lo.toFixed(1)} / max ${b.hi.toFixed(1)} / n=${b.n})`;
+          c.appendChild(title);
+          svg.appendChild(c);
+        }
+      }
+
+      async function pollHistory() {
+        try {
+          const res = await fetch('/history.json');
+          if (!res.ok) return;
+          const data = await res.json();
+          const dist = data?.distance;
+          if (!dist) return;
+          const transform = tankCal ? distanceToFullness : v => v;
+          const unit      = tankCal ? '%' : 'cm';
+          renderChart($chart24h, $range24h, $window24h, dist.short, transform, unit);
+          renderChart($chart30d, $range30d, $window30d, dist.long,  transform, unit);
+        } catch (_e) { /* keep last render */ }
       }
 
       document.getElementById('clearLog').addEventListener('click', () => {
@@ -433,7 +642,9 @@
         await loadConfig();
         render();
         poll();
+        pollHistory();
         setInterval(poll, POLL_INTERVAL_MS);
+        setInterval(pollHistory, HISTORY_POLL_MS);
       })();
     })();
   </script>

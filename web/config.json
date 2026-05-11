@@ -1,5 +1,9 @@
 {
   "title": "Retention Tank",
+  "tank": {
+    "empty_distance_cm": 140,
+    "full_distance_cm": 20
+  },
   "valves": [
     { "name": "Valve 1", "note": "" },
     { "name": "Valve 2", "note": "" },
