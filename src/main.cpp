@@ -186,20 +186,39 @@ static void server_handle_sw_legacy()
   server.send(200, "text/plain", "OK");
 }
 
-// UI is held in web/index.html and embedded into the firmware via
+// UI assets are held under web/ and embedded into the firmware via
 // platformio.ini's board_build.embed_txtfiles. The IDF build system exposes
 // _binary_<path>_start / _end symbols (slashes and dots become underscores).
-extern const uint8_t INDEX_HTML_START[] asm("_binary_web_index_html_start");
-extern const uint8_t INDEX_HTML_END[]   asm("_binary_web_index_html_end");
+extern const uint8_t INDEX_HTML_START[]  asm("_binary_web_index_html_start");
+extern const uint8_t INDEX_HTML_END[]    asm("_binary_web_index_html_end");
+extern const uint8_t CONFIG_JSON_START[] asm("_binary_web_config_json_start");
+extern const uint8_t CONFIG_JSON_END[]   asm("_binary_web_config_json_end");
 
-/// @brief `GET /` — serve the web UI from the flash blob embedded by PlatformIO.
+/// @brief Send an embedded flash blob as an HTTP response body.
+/// @param start        Pointer to the blob's `_binary_..._start` symbol.
+/// @param end          Pointer to the blob's `_binary_..._end` symbol.
+/// @param content_type MIME type for the response.
+/// @note `embed_txtfiles` appends a NUL terminator to text blobs; this helper
+///       strips it so it isn't sent on the wire.
+static void send_embedded(const uint8_t *start, const uint8_t *end, const char *content_type)
+{
+  size_t len = (end - start);
+  if (len > 0 && start[len - 1] == 0) len -= 1;
+  server.send_P(200, content_type, (PGM_P)start, len);
+}
+
+/// @brief `GET /` — serve the web UI HTML from the flash blob.
 static void server_handle_root()
 {
-  // _end - _start is the file size; embed_txtfiles also appends a NUL, so
-  // subtract one to avoid sending it as part of the body.
-  size_t len = (INDEX_HTML_END - INDEX_HTML_START);
-  if (len > 0 && INDEX_HTML_START[len - 1] == 0) len -= 1;
-  server.send_P(200, "text/html", (PGM_P)INDEX_HTML_START, len);
+  send_embedded(INDEX_HTML_START, INDEX_HTML_END, "text/html");
+}
+
+/// @brief `GET /config.json` — serve UI configuration (title, valve labels).
+/// @note The file is embedded at build time from `web/config.json`; the
+///       firmware does not parse it — the browser does.
+static void server_handle_config()
+{
+  send_embedded(CONFIG_JSON_START, CONFIG_JSON_END, "application/json");
 }
 
 /// @brief Arduino entry point: initialize GPIO, Ethernet, HTTP, and OTA.
@@ -233,6 +252,7 @@ void setup()
   relay_mask = 0;
 
   server.on("/", server_handle_root);
+  server.on("/config.json", server_handle_config);
   server.on("/sw", server_handle_sw);
   server.on("/closeall", server_handle_closeall);
   server.on("/poll", server_handle_poll);

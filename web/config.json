@@ -1,0 +1,13 @@
+{
+  "title": "Retention Tank",
+  "valves": [
+    { "name": "Valve 1", "note": "" },
+    { "name": "Valve 2", "note": "" },
+    { "name": "Valve 3", "note": "" },
+    { "name": "Valve 4", "note": "" },
+    { "name": "Valve 5", "note": "" },
+    { "name": "Valve 6", "note": "" },
+    { "name": "Valve 7", "note": "" },
+    { "name": "Valve 8", "note": "" }
+  ]
+}

@@ -136,6 +136,11 @@
       font-weight: 600;
       font-size: 13px;
     }
+    .valve .note {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.3;
+    }
     .valve .status {
       font-size: 11px;
       color: var(--muted);
@@ -242,7 +247,7 @@
 <body>
   <header class="top">
     <div>
-      <h1>Retention Tank<span id="conn" class="dot" title="connection"></span></h1>
+      <h1><span id="title">Retention Tank</span><span id="conn" class="dot" title="connection"></span></h1>
       <small id="version" class="version">&mdash;</small>
     </div>
     <div class="metrics">
@@ -284,6 +289,9 @@
       let relays = 0;
       let paused = false;
       const pending = new Set();
+      let valveLabels = Array.from({ length: VALVE_COUNT }, (_, i) => ({
+        name: `Valve ${i + 1}`, note: '',
+      }));
 
       const $valves = document.getElementById('valves');
       const $terminal = document.getElementById('terminal');
@@ -291,6 +299,35 @@
       const $uptime = document.getElementById('uptime');
       const $conn = document.getElementById('conn');
       const $version = document.getElementById('version');
+      const $title = document.getElementById('title');
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      async function loadConfig() {
+        try {
+          const res = await fetch('/config.json');
+          if (!res.ok) return;
+          const cfg = await res.json();
+          if (typeof cfg.title === 'string' && cfg.title) {
+            document.title = cfg.title;
+            $title.textContent = cfg.title;
+          }
+          if (Array.isArray(cfg.valves)) {
+            for (let i = 0; i < VALVE_COUNT; i++) {
+              const v = cfg.valves[i];
+              if (!v) continue;
+              if (typeof v.name === 'string' && v.name) valveLabels[i].name = v.name;
+              if (typeof v.note === 'string')          valveLabels[i].note = v.note;
+            }
+          }
+        } catch (_e) { /* fall back to defaults */ }
+      }
 
       function formatUptime(ms) {
         const totalSec = Math.floor(ms / 1000);
@@ -304,13 +341,15 @@
         $valves.innerHTML = '';
         for (let i = 0; i < VALVE_COUNT; i++) {
           const open = !!(relays & (1 << i));
+          const { name, note } = valveLabels[i];
           const el = document.createElement('div');
           el.className = 'valve'
             + (open ? ' open' : '')
             + (pending.has(i + 1) ? ' pending' : '');
           el.dataset.n = i + 1;
           el.innerHTML = `
-            <div class="name">Valve ${i + 1}</div>
+            <div class="name">${escapeHtml(name)}</div>
+            ${note ? `<div class="note">${escapeHtml(note)}</div>` : ''}
             <div class="status">${open ? 'Open' : 'Closed'}</div>
             <div class="toggle"></div>
           `;
@@ -390,9 +429,12 @@
         paused = document.hidden;
       });
 
-      render();
-      poll();
-      setInterval(poll, POLL_INTERVAL_MS);
+      (async () => {
+        await loadConfig();
+        render();
+        poll();
+        setInterval(poll, POLL_INTERVAL_MS);
+      })();
     })();
   </script>
 </body>
