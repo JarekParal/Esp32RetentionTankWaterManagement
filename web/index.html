@@ -279,6 +279,47 @@
     .chart-line   { fill: none; stroke: var(--accent); stroke-width: 1; }
     .chart-dot    { fill: var(--accent); }
     .chart-empty  { fill: var(--muted); font-size: 5px; }
+
+    section.inputs { grid-column: 1 / -1; }
+    .input-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 10px;
+    }
+    .input-card {
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .input-card.active {
+      background: color-mix(in srgb, var(--ok) 18%, var(--panel2));
+      border-color: var(--ok);
+    }
+    .input-card .name  { font-weight: 600; font-size: 13px; }
+    .input-card .note  { font-size: 11px; color: var(--muted); line-height: 1.3; }
+    .input-card .status {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .input-card.active .status { color: var(--ok); }
+    .input-indicator {
+      align-self: flex-end;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--off);
+      transition: background .2s, box-shadow .2s;
+    }
+    .input-card.active .input-indicator {
+      background: var(--ok);
+      box-shadow: 0 0 6px var(--ok);
+    }
   </style>
 </head>
 <body>
@@ -335,21 +376,31 @@
       </div>
       <pre id="terminal"></pre>
     </section>
+
+    <section class="inputs">
+      <h2>Digital Inputs</h2>
+      <div id="inputs" class="input-grid"></div>
+    </section>
   </main>
 
   <script>
     (() => {
       const VALVE_COUNT = 8;
+      const INPUT_COUNT = 8;
       const POLL_INTERVAL_MS = 750;
       const HISTORY_POLL_MS = 30000;
       const SVG_NS = 'http://www.w3.org/2000/svg';
 
       let lastSeq = 0;
       let relays = 0;
+      let inputs = 0;
       let paused = false;
       const pending = new Set();
       let valveLabels = Array.from({ length: VALVE_COUNT }, (_, i) => ({
         name: `Valve ${i + 1}`, note: '',
+      }));
+      let inputLabels = Array.from({ length: INPUT_COUNT }, (_, i) => ({
+        name: `Input ${i + 1}`, note: '',
       }));
       let tankCal = null;  // { empty_cm, full_cm } after loadConfig if set
 
@@ -361,6 +412,7 @@
       const $conn = document.getElementById('conn');
       const $version = document.getElementById('version');
       const $title = document.getElementById('title');
+      const $inputs   = document.getElementById('inputs');
       const $chart24h = document.getElementById('chart-24h');
       const $chart30d = document.getElementById('chart-30d');
       const $range24h = document.getElementById('range-24h');
@@ -391,6 +443,14 @@
               if (!v) continue;
               if (typeof v.name === 'string' && v.name) valveLabels[i].name = v.name;
               if (typeof v.note === 'string')          valveLabels[i].note = v.note;
+            }
+          }
+          if (Array.isArray(cfg.inputs)) {
+            for (let i = 0; i < INPUT_COUNT; i++) {
+              const v = cfg.inputs[i];
+              if (!v) continue;
+              if (typeof v.name === 'string' && v.name) inputLabels[i].name = v.name;
+              if (typeof v.note === 'string')           inputLabels[i].note = v.note;
             }
           }
           if (cfg.tank && Number.isFinite(cfg.tank.empty_distance_cm)
@@ -451,6 +511,23 @@
         }
       }
 
+      function renderInputs() {
+        $inputs.innerHTML = '';
+        for (let i = 0; i < INPUT_COUNT; i++) {
+          const active = !!(inputs & (1 << i));
+          const { name, note } = inputLabels[i];
+          const el = document.createElement('div');
+          el.className = 'input-card' + (active ? ' active' : '');
+          el.innerHTML = `
+            <div class="name">${escapeHtml(name)}</div>
+            ${note ? `<div class="note">${escapeHtml(note)}</div>` : ''}
+            <div class="status">${active ? 'Active' : 'Inactive'}</div>
+            <div class="input-indicator"></div>
+          `;
+          $inputs.appendChild(el);
+        }
+      }
+
       async function toggleValve(n, on) {
         pending.add(n);
         render();
@@ -498,6 +575,10 @@
           if (typeof json.relays === 'number' && json.relays !== relays) {
             relays = json.relays;
             render();
+          }
+          if (typeof json.inputs === 'number' && json.inputs !== inputs) {
+            inputs = json.inputs;
+            renderInputs();
           }
           if (json.distance_cm !== undefined) {
             $level.textContent = formatLevel(json.distance_cm);
@@ -641,6 +722,7 @@
       (async () => {
         await loadConfig();
         render();
+        renderInputs();
         poll();
         pollHistory();
         setInterval(poll, POLL_INTERVAL_MS);

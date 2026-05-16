@@ -35,10 +35,14 @@ IPAddress dns(192, 168, 1, 1);
 
 WebServer server(80);
 PCF8574 pcf8574_re(0x24, 4, 5);
+PCF8574 pcf8574_in(0x26, 4, 5);
 
 // ---------------- Valve state ----------------
 // bit i = valve (i+1) is OPEN. PCF8574 is active-low: write 0 to OPEN, 1 to CLOSE.
 static uint8_t relay_mask = 0;
+
+// bit i = input (i+1) is ACTIVE. PCF8574 is active-low: read 0 means active.
+static uint8_t input_mask = 0;
 
 /// @brief Drive a single valve to open or closed and log the transition.
 /// @param n    1-based valve index (1..8); out-of-range calls are ignored.
@@ -66,6 +70,26 @@ static History distance_history(
   "dist",
   History::RingConfig{ /*period_sec=*/ 600,   /*slot_count=*/ 144, /*min_persist_sec=*/ 3600 },
   History::RingConfig{ /*period_sec=*/ 86400, /*slot_count=*/ 30,  /*min_persist_sec=*/ 0 });
+
+// ---------------- Digital inputs (PCF8574 @ 0x26) ----------------
+static unsigned long last_input_ms = 0;
+constexpr unsigned long INPUT_REFRESH_MS = 250;
+
+/// @brief Read all 8 PCF8574 digital inputs, update input_mask, log transitions.
+/// @note PCF8574 is active-low: read LOW means the input is active.
+static void poll_inputs()
+{
+  uint8_t mask = 0;
+  for (int i = 0; i < 8; i++) {
+    if (pcf8574_in.digitalRead(i) == LOW) mask |= (1u << i);
+  }
+  for (int i = 0; i < 8; i++) {
+    bool was    = (input_mask >> i) & 1;
+    bool active = (mask >> i) & 1;
+    if (was != active) wlog_printf("Input %d -> %s", i + 1, active ? "ACTIVE" : "INACTIVE");
+  }
+  input_mask = mask;
+}
 
 /// @brief Trigger the HC-SR04 and convert the echo pulse to centimeters.
 /// @return Measured distance in cm; 0.0 on echo timeout (~5 m range).
@@ -129,6 +153,8 @@ static void server_handle_poll()
   json += String(cached_distance_cm, 1);
   json += ",\"uptime_ms\":";
   json += millis();
+  json += ",\"inputs\":";
+  json += input_mask;
   json += ",\"version\":\"";
   json_escape_into(json, util_version_string());
   json += "\",\"lines\":[";
@@ -277,6 +303,9 @@ void setup()
   for (int i = 0; i < 8; i++) pcf8574_re.digitalWrite(i, 1); // all valves CLOSED
   relay_mask = 0;
 
+  for (int i = 0; i < 8; i++) pcf8574_in.pinMode(i, INPUT);
+  pcf8574_in.begin();
+
   server.on("/", server_handle_root);
   server.on("/config.json", server_handle_config);
   server.on("/history.json", server_handle_history);
@@ -314,5 +343,9 @@ void loop()
     if (cached_distance_cm > 0.0f) {
       distance_history.record(time(nullptr), cached_distance_cm);
     }
+  }
+  if (now - last_input_ms >= INPUT_REFRESH_MS) {
+    poll_inputs();
+    last_input_ms = now;
   }
 }

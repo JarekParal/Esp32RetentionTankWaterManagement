@@ -13,5 +13,15 @@
     { "name": "Valve 6", "note": "" },
     { "name": "Valve 7", "note": "" },
     { "name": "Valve 8", "note": "" }
+  ],
+  "inputs": [
+    { "name": "Input 1", "note": "" },
+    { "name": "Input 2", "note": "" },
+    { "name": "Input 3", "note": "" },
+    { "name": "Input 4", "note": "" },
+    { "name": "Input 5", "note": "" },
+    { "name": "Input 6", "note": "" },
+    { "name": "Input 7", "note": "" },
+    { "name": "Input 8", "note": "" }
   ]
 }
