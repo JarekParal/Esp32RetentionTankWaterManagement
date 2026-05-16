@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-ESP32 firmware for a water retention tank controller running on the **Hankerila HKL-EA8** board. Single Arduino sketch ([src/main.cpp](src/main.cpp)) that exposes a tiny HTTP UI over wired Ethernet (LAN8720 PHY — no Wi-Fi) for driving an 8-channel relay bank wired to **solenoid valves**, and reads an HC-SR04 ultrasonic level sensor plus a pulse-based water-flow sensor.
+ESP32 firmware for a water retention tank controller running on the **Hankerila HKL-EA8** board. Single Arduino sketch ([src/main.cpp](src/main.cpp)) that exposes an HTTP UI over wired Ethernet (LAN8720 PHY — no Wi-Fi) for driving an 8-channel relay bank wired to **solenoid valves**, reads an HC-SR04 ultrasonic level sensor, and monitors **8 digital inputs** via a second PCF8574 I²C expander.
 
 ## Build & flash
 
@@ -35,15 +35,25 @@ Bumping the platform requires a port, not a config change. The header comment at
 
 All hardware bindings live as `#define`s and `constexpr int`s at the top of [main.cpp](src/main.cpp). Reading those is the fastest way to understand the build, but the non-obvious parts:
 
-- **Ethernet (LAN8720 PHY)**: ETH lib pre-defines `ETH_CLK_MODE` to `ETH_CLOCK_GPIO0_IN`. This board needs `ETH_CLOCK_GPIO17_OUT`, so the sketch does `#undef ETH_CLK_MODE` before redefining ([main.cpp:17](src/main.cpp#L17)). Don't drop the `#undef` — it suppresses a redefinition warning that becomes silent breakage if `ETH.h` is reordered. MDC=GPIO23, MDIO=GPIO18, PHY power not wired (`-1`).
+- **Ethernet (LAN8720 PHY)**: ETH lib pre-defines `ETH_CLK_MODE` to `ETH_CLOCK_GPIO0_IN`. This board needs `ETH_CLOCK_GPIO17_OUT`, so the sketch does `#undef ETH_CLK_MODE` before redefining ([main.cpp:31](src/main.cpp#L31)). Don't drop the `#undef` — it suppresses a redefinition warning that becomes silent breakage if `ETH.h` is reordered. MDC=GPIO23, MDIO=GPIO18, PHY power not wired (`-1`).
 - **Relays**: PCF8574 I²C expander at address `0x24`, SDA=4, SCL=5. **Active-low: write `0` to turn ON, `1` to turn OFF.** All 8 channels are forced OFF in `setup()`.
-- **Ultrasonic (HC-SR04)**: trigger=GPIO15, echo=GPIO16. Distance read on demand inside `server_handle_root()` — currently displayed in the web page only.
-- **Water flow sensor**: GPIO2, `INPUT_PULLUP`, `CHANGE` interrupt → `handle_water_flow_change` (IRAM). Pulse counter persisted to EEPROM byte 0.
+- **Ultrasonic (HC-SR04)**: trigger=GPIO15, echo=GPIO16. Sampled every 1 s in `loop()`; result cached in `cached_distance_cm` and served via `/poll`. Recorded into a two-ring `History` (10 min / 24 h) persisted to NVS.
+- **Digital inputs**: PCF8574 I²C expander at address `0x26`, SDA=4, SCL=5 (same bus as relays). **Active-low: read `0` means input is active.** State packed into `input_mask` (bit i = input i+1 active) and served via `/poll` as `"inputs"`. Hardware modification required — see [doc/HW modification notes.md](doc/HW%20modification%20notes.md):
+  - R47 (2 kΩ) and R106 (10 kΩ) removed from the BEEP circuit
+  - PCF8574 `/INT` (open-drain, active-low) wired directly to GPIO12
+  - GPIO12 configured as `INPUT_PULLUP` in software — **do not add an external pull-up**: GPIO12 is a strapping pin sampled at reset; a hardware pull-up holds it HIGH and switches the flash to 1.8 V mode, corrupting flashing (MD5 mismatch). The software pull-up activates after the strapping phase.
+  - ISR (`isr_pcf_input`, `IRAM_ATTR`, `FALLING`) sets `inputs_changed`; `loop()` calls `poll_inputs()` on the flag.
+  - `poll_inputs()` uses `Wire.requestFrom(0x26, 1)` directly — **do not replace with `pcf8574_in.digitalRead()` in a loop**. The library's 10 ms latency cache causes all 8 pins to silently return `LOW` when called again within the window, producing a spurious all-inputs-active mask.
 - **Network**: `IPAddress local_ip(uint32_t(0))` means DHCP. The fixed-IP line above it is intentionally commented out.
 
 HTTP surface (port 80, single-threaded `WebServer`):
-- `GET /` — relay control HTML + live ultrasonic distance
-- `GET /SW?LED=on1..on8` / `off1..off8` — toggle a single relay
+- `GET /` — serve web UI HTML (embedded flash blob)
+- `GET /config.json` — serve UI labels/config (embedded flash blob, parsed by browser)
+- `GET /poll?since=<seq>` — JSON snapshot: `seq`, `relays`, `distance_cm`, `uptime_ms`, `inputs`, `version`, new log `lines`
+- `GET /history.json` — distance history rings (short 24 h / long 30 d) as min/avg/max buckets
+- `GET /sw?n=<1..8>&on=<0|1>` — open/close one valve
+- `GET /closeall` — close all valves
+- `GET /SW?LED=on1..on8|off1..off8` — legacy single-valve toggle (back-compat only)
 
 ## Code style
 

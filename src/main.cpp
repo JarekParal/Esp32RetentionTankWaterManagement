@@ -12,6 +12,7 @@
 #include <WebServer.h>
 #include <ArduinoOTA.h>
 #include <PCF8574.h>
+#include <Wire.h>
 
 #include "log_buffer.h"
 #include "util.h"
@@ -19,6 +20,8 @@
 
 constexpr int ULTRASOUND_TRIGER_PIN = 15; // RX on connector
 constexpr int ULTRASOUND_ECHO_PIN = 16;   // TX on connector
+// R47+R106 removed; PCF8574 /INT (open-drain) wired directly to GPIO12 — see doc/HW modification notes.md
+constexpr int INPUT_INT_PIN = 12;
 
 #define ETH_ADDR 0
 #define ETH_POWER_PIN -1
@@ -43,6 +46,7 @@ static uint8_t relay_mask = 0;
 
 // bit i = input (i+1) is ACTIVE. PCF8574 is active-low: read 0 means active.
 static uint8_t input_mask = 0;
+static volatile bool inputs_changed = false;
 
 /// @brief Drive a single valve to open or closed and log the transition.
 /// @param n    1-based valve index (1..8); out-of-range calls are ignored.
@@ -71,18 +75,19 @@ static History distance_history(
   History::RingConfig{ /*period_sec=*/ 600,   /*slot_count=*/ 144, /*min_persist_sec=*/ 3600 },
   History::RingConfig{ /*period_sec=*/ 86400, /*slot_count=*/ 30,  /*min_persist_sec=*/ 0 });
 
-// ---------------- Digital inputs (PCF8574 @ 0x26) ----------------
-static unsigned long last_input_ms = 0;
-constexpr unsigned long INPUT_REFRESH_MS = 250;
+// ---------------- Digital inputs (PCF8574 @ 0x26, /INT → GPIO12) ----------------
 
 /// @brief Read all 8 PCF8574 digital inputs, update input_mask, log transitions.
-/// @note PCF8574 is active-low: read LOW means the input is active.
+/// @note Single Wire.requestFrom() gives an atomic snapshot and bypasses the
+///       library's 10 ms latency cache, which silently returns LOW for all pins
+///       when called again within the latency window (byteBuffered=0 + no I2C read
+///       = all fall through to the default LOW value for pullDown-mode pins).
 static void poll_inputs()
 {
-  uint8_t mask = 0;
-  for (int i = 0; i < 8; i++) {
-    if (pcf8574_in.digitalRead(i) == LOW) mask |= (1u << i);
-  }
+  Wire.requestFrom((uint8_t)0x26, (uint8_t)1);
+  if (!Wire.available()) return;   // I2C error — keep last known state
+  uint8_t raw  = Wire.read();
+  uint8_t mask = ~raw;             // active-LOW: invert so bit=1 means active
   for (int i = 0; i < 8; i++) {
     bool was    = (input_mask >> i) & 1;
     bool active = (mask >> i) & 1;
@@ -90,6 +95,9 @@ static void poll_inputs()
   }
   input_mask = mask;
 }
+
+/// @brief GPIO12 ISR — fires on PCF8574 /INT falling edge; deferred to loop().
+void IRAM_ATTR isr_pcf_input() { inputs_changed = true; }
 
 /// @brief Trigger the HC-SR04 and convert the echo pulse to centimeters.
 /// @return Measured distance in cm; 0.0 on echo timeout (~5 m range).
@@ -305,6 +313,9 @@ void setup()
 
   for (int i = 0; i < 8; i++) pcf8574_in.pinMode(i, INPUT);
   pcf8574_in.begin();
+  poll_inputs();  // capture initial state; also deasserts any pending /INT before we attach
+  pinMode(INPUT_INT_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(INPUT_INT_PIN), isr_pcf_input, FALLING);
 
   server.on("/", server_handle_root);
   server.on("/config.json", server_handle_config);
@@ -344,8 +355,8 @@ void loop()
       distance_history.record(time(nullptr), cached_distance_cm);
     }
   }
-  if (now - last_input_ms >= INPUT_REFRESH_MS) {
+  if (inputs_changed) {
+    inputs_changed = false;
     poll_inputs();
-    last_input_ms = now;
   }
 }
