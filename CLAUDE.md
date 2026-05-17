@@ -22,14 +22,20 @@ CI uses plain `pio run` ([.github/workflows/build.yml](.github/workflows/build.y
 
 There are no unit tests — the `test/` directory holds only the default PlatformIO placeholder.
 
-## Critical: do not unpin the platform
+## Platform pin
 
-[platformio.ini](platformio.ini) pins `platform = espressif32@6.10.0`. That version ships `framework-arduinoespressif32 @ 3.20017.x`, i.e. **Arduino-ESP32 core 2.0.17**, which is what [main.cpp](src/main.cpp) targets. Newer espressif32 platforms (7.x+) move to Arduino core 3.x, which:
+[platformio.ini](platformio.ini) pins the **pioarduino fork** of `platform-espressif32` at release `55.03.38`, which ships **Arduino-ESP32 core 3.3.8** on **ESP-IDF 5.5.4**. The pin is a release-zip URL, not a registry version:
 
-- removes the legacy `ETH.begin(addr, power, mdc, mdio, type, clk_mode)` signature used in `setup()`
-- changes `attachInterrupt` / `IRAM_ATTR` / EEPROM library expectations
+```ini
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38/platform-espressif32.zip
+```
 
-Bumping the platform requires a port, not a config change. The header comment at the top of `main.cpp` carries the same warning.
+Why the fork: official `platformio/platform-espressif32` stayed on Arduino core 2.0.17 even at 7.x; pioarduino is the actively maintained Arduino-ESP32 3.x line for PlatformIO.
+
+When bumping the platform pin again:
+- `ETH.begin()` uses the 3.x signature `(type, addr, mdc, mdio, power, clk_mode)` — note the reorder vs. the 2.0.17 `(addr, power, mdc, mdio, type, clk_mode)` form.
+- `IRAM_ATTR`, `attachInterrupt(digitalPinToInterrupt(pin), fn, FALLING)`, `Preferences`, `Wire`, `WebServer`, and `ArduinoOTA` are unchanged from 2.x and stay compatible.
+- pioarduino's bootstrap **refuses to install from an MSys/Mingw shell** (Git Bash, MSYS2). Invoke `pio run` from PowerShell or cmd the first time it has to install or upgrade the toolchain — otherwise `tool-esptoolpy` and the xtensa toolchain end up half-installed and you'll need `pio pkg uninstall -g -p espressif32` to recover.
 
 ## Architecture / wiring map
 

@@ -5,7 +5,8 @@
  * Build/flash with `pio run -e nodemcu-32s -t upload` (USB) or
  * `pio run -e nodemcu-32s-ota -t upload` (network, ArduinoOTA).
  *
- * espressif32@6.10.0 / Arduino core 2.0.17 — see platformio.ini.
+ * pioarduino/platform-espressif32@55.03.38 — Arduino core 3.3.8, ESP-IDF 5.5.4
+ * see platformio.ini
  */
 
 #include <ETH.h>
@@ -320,7 +321,7 @@ void setup()
   delay(1000);
 
   wlog_println("Starting Ethernet...");
-  ETH.begin(ETH_ADDR, ETH_POWER_PIN, ETH_MDC_PIN, ETH_MDIO_PIN, ETH_TYPE, ETH_CLK_MODE);
+  ETH.begin(ETH_TYPE, ETH_ADDR, ETH_MDC_PIN, ETH_MDIO_PIN, ETH_POWER_PIN, ETH_CLK_MODE);
   if (ETH.config(local_ip, gateway, subnet, dns, dns) == false)
   {
     wlog_println("LAN8720 configuration failed.");
