@@ -316,6 +316,32 @@ static void server_handle_history()
   server.send(200, "application/json", json);
 }
 
+/// @brief `GET /history/clear?ring=short|long` — erase one history ring,
+///        in RAM and NVS, on user demand.
+/// @note Two-step confirmation is enforced client-side in the UI; this
+///       endpoint performs the destructive action unconditionally and is
+///       not idempotent. Returns 400 if @c ring is missing or unknown.
+static void server_handle_history_clear()
+{
+  String ring = server.arg("ring");
+  if (ring == "short")
+  {
+    distance_history.clear_short();
+    wlog_println("History 24h ring cleared (RAM+NVS)");
+    server.send(200, "application/json", "{\"cleared\":\"short\",\"ok\":true}");
+  }
+  else if (ring == "long")
+  {
+    distance_history.clear_long();
+    wlog_println("History 30d ring cleared (RAM+NVS)");
+    server.send(200, "application/json", "{\"cleared\":\"long\",\"ok\":true}");
+  }
+  else
+  {
+    server.send(400, "application/json", "{\"error\":\"ring must be short or long\"}");
+  }
+}
+
 /// @brief Arduino entry point: initialize GPIO, Ethernet, HTTP, and OTA.
 void setup()
 {
@@ -366,6 +392,7 @@ void setup()
   server.on("/", server_handle_root);
   server.on("/config.json", server_handle_config);
   server.on("/history.json", server_handle_history);
+  server.on("/history/clear", server_handle_history_clear);
   server.on("/sw", server_handle_sw);
   server.on("/closeall", server_handle_closeall);
   server.on("/poll", server_handle_poll);

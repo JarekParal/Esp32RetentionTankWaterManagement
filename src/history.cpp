@@ -109,6 +109,27 @@ struct History::Ring
     b.n += 1;
   }
 
+  /// Zero the in-memory buckets and remove the NVS key. Subsequent record()
+  /// calls start writing into fresh buckets; subsequent persist() will write
+  /// a fresh blob to NVS.
+  void clear()
+  {
+    if (buckets)
+    {
+      for (size_t i = 0; i < slot_count; i++)
+      {
+        buckets[i] = Bucket{};
+      }
+    }
+    last_persist_epoch = 0;
+    Preferences prefs;
+    if (prefs.begin(ns, /*readOnly=*/false))
+    {
+      prefs.remove(key);
+      prefs.end();
+    }
+  }
+
   /// Emit bucket entries (no surrounding `[]`) to @p out, oldest first.
   void serialize_buckets(String &out, uint32_t current_t_unit) const
   {
@@ -165,6 +186,18 @@ void History::begin()
     short_ring_->begin();
   if (long_ring_)
     long_ring_->begin();
+}
+
+void History::clear_short()
+{
+  if (short_ring_)
+    short_ring_->clear();
+}
+
+void History::clear_long()
+{
+  if (long_ring_)
+    long_ring_->clear();
 }
 
 void History::record(time_t now_epoch, float value)

@@ -72,6 +72,16 @@ public:
   ///                  the caller's responsibility.
   void record(time_t now_epoch, float value);
 
+  /// @brief Erase the short (high-resolution) ring's data — both in RAM and
+  ///        in NVS. Intended for one-off "reset the last 24 h" requests from
+  ///        the UI. The ring stays usable after the call; subsequent record()
+  ///        starts filling fresh buckets.
+  void clear_short();
+
+  /// @brief Erase the long (low-resolution) ring's data — both in RAM and
+  ///        in NVS. See clear_short() for behavior.
+  void clear_long();
+
   /// @brief Append the signal's series as a JSON object value to @p out.
   ///
   /// Format:

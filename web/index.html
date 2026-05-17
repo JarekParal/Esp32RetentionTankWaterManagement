@@ -267,6 +267,20 @@
       text-transform: none;
       letter-spacing: 0;
     }
+    .chart-title button {
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font: 11px/1.4 system-ui, sans-serif;
+      text-transform: none;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+    .chart-title button:hover { background: var(--panel); }
+    .chart-title button.danger { color: #fff; background: #b91c1c; border-color: #991b1b; }
+    .chart-title button.danger:hover { background: #991b1b; }
     .chart {
       display: block;
       width: 100%;
@@ -348,6 +362,7 @@
           <div class="chart-title">
             <span id="window-24h">Last 24 hours</span>
             <span class="range" id="range-24h">&mdash;</span>
+            <button id="clearShort" class="danger" type="button">Clear 24h</button>
           </div>
           <svg id="chart-24h" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
         </div>
@@ -355,6 +370,7 @@
           <div class="chart-title">
             <span id="window-30d">Last 30 days</span>
             <span class="range" id="range-30d">&mdash;</span>
+            <button id="clearLong" class="danger" type="button">Clear 30d</button>
           </div>
           <svg id="chart-30d" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
         </div>
@@ -715,6 +731,22 @@
         $terminal.textContent = '';
       });
       document.getElementById('closeAll').addEventListener('click', closeAll);
+
+      async function clearHistoryRing(ring, humanLabel) {
+        if (!window.confirm(`Clear the ${humanLabel} of history data?`)) return;
+        if (!window.confirm(`This permanently erases ${humanLabel} of stored measurements from device flash. Continue?`)) return;
+        try {
+          const res = await fetch(`/history/clear?ring=${encodeURIComponent(ring)}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          await pollHistory();
+        } catch (e) {
+          alert(`Clear failed: ${e.message || e}`);
+        }
+      }
+      document.getElementById('clearShort').addEventListener(
+        'click', () => clearHistoryRing('short', 'last 24 hours'));
+      document.getElementById('clearLong').addEventListener(
+        'click', () => clearHistoryRing('long', 'last 30 days'));
       document.addEventListener('visibilitychange', () => {
         paused = document.hidden;
       });
