@@ -18,6 +18,7 @@
 #include "log_buffer.h"
 #include "util.h"
 #include "history.h"
+#include "oled.h"
 
 constexpr int ULTRASOUND_TRIGER_PIN = 32; // RX on connector
 constexpr int ULTRASOUND_ECHO_PIN = 33;   // TX on connector
@@ -73,6 +74,10 @@ static void set_valve(int n, bool open)
 static float cached_distance_cm = 0.0f;
 static unsigned long last_distance_ms = 0;
 constexpr unsigned long DISTANCE_REFRESH_MS = 10000;
+
+// ---------------- OLED refresh ----------------
+static unsigned long last_oled_ms = 0;
+constexpr unsigned long OLED_REFRESH_MS = 200;
 
 // 10-min × 144 short ring = 24 h, throttled to one NVS write per hour.
 // 1-day × 30 long ring = 30 d, one NVS write per daily rollover (~1/day).
@@ -355,6 +360,9 @@ void setup()
   pinMode(INPUT_INT_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(INPUT_INT_PIN), isr_pcf_input, FALLING);
 
+  // OLED at 0x3C — shares the Wire bus already initialized by the PCF8574s.
+  oled_init();
+
   server.on("/", server_handle_root);
   server.on("/config.json", server_handle_config);
   server.on("/history.json", server_handle_history);
@@ -403,5 +411,18 @@ void loop()
   {
     inputs_changed = false;
     poll_inputs();
+  }
+  if (now - last_oled_ms >= OLED_REFRESH_MS)
+  {
+    last_oled_ms = now;
+    String ip = ETH.localIP().toString();
+    OledSnapshot snap{
+        cached_distance_cm,
+        relay_mask,
+        input_mask,
+        now,
+        ip.c_str(),
+    };
+    oled_render(snap);
   }
 }
