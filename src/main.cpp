@@ -18,8 +18,8 @@
 #include "util.h"
 #include "history.h"
 
-constexpr int ULTRASOUND_TRIGER_PIN = 15; // RX on connector
-constexpr int ULTRASOUND_ECHO_PIN = 16;   // TX on connector
+constexpr int ULTRASOUND_TRIGER_PIN = 32; // RX on connector
+constexpr int ULTRASOUND_ECHO_PIN = 33;   // TX on connector
 // R47+R106 removed; PCF8574 /INT (open-drain) wired directly to GPIO12 — see doc/HW modification notes.md
 constexpr int INPUT_INT_PIN = 12;
 
@@ -66,7 +66,7 @@ static void set_valve(int n, bool open)
 // ---------------- Ultrasonic (cached) ----------------
 static float cached_distance_cm = 0.0f;
 static unsigned long last_distance_ms = 0;
-constexpr unsigned long DISTANCE_REFRESH_MS = 1000;
+constexpr unsigned long DISTANCE_REFRESH_MS = 10000;
 
 // 10-min × 144 short ring = 24 h, throttled to one NVS write per hour.
 // 1-day × 30 long ring = 30 d, one NVS write per daily rollover (~1/day).
@@ -351,6 +351,7 @@ void loop()
   if (now - last_distance_ms >= DISTANCE_REFRESH_MS) {
     cached_distance_cm = read_distance_cm();
     last_distance_ms = now;
+    wlog_printf("Distance: %.1f cm", cached_distance_cm);
     if (cached_distance_cm > 0.0f) {
       distance_history.record(time(nullptr), cached_distance_cm);
     }

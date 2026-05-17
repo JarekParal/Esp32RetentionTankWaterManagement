@@ -37,7 +37,7 @@ All hardware bindings live as `#define`s and `constexpr int`s at the top of [mai
 
 - **Ethernet (LAN8720 PHY)**: ETH lib pre-defines `ETH_CLK_MODE` to `ETH_CLOCK_GPIO0_IN`. This board needs `ETH_CLOCK_GPIO17_OUT`, so the sketch does `#undef ETH_CLK_MODE` before redefining ([main.cpp:31](src/main.cpp#L31)). Don't drop the `#undef` — it suppresses a redefinition warning that becomes silent breakage if `ETH.h` is reordered. MDC=GPIO23, MDIO=GPIO18, PHY power not wired (`-1`).
 - **Relays**: PCF8574 I²C expander at address `0x24`, SDA=4, SCL=5. **Active-low: write `0` to turn ON, `1` to turn OFF.** All 8 channels are forced OFF in `setup()`.
-- **Ultrasonic (HC-SR04)**: trigger=GPIO15, echo=GPIO16. Sampled every 1 s in `loop()`; result cached in `cached_distance_cm` and served via `/poll`. Recorded into a two-ring `History` (10 min / 24 h) persisted to NVS.
+- **Ultrasonic (HC-SR04)**: trigger=GPIO32, echo=GPIO33 (R50 swapped 2 kΩ → 200 Ω, R52 47 kΩ pull-up kept — see [doc/HW modification notes.md](doc/HW%20modification%20notes.md)). Sampled every 10 s in `loop()`; result cached in `cached_distance_cm`, logged on each sample, served via `/poll`, and recorded into a two-ring `History` (10 min / 24 h) persisted to NVS.
 - **Digital inputs**: PCF8574 I²C expander at address `0x26`, SDA=4, SCL=5 (same bus as relays). **Active-low: read `0` means input is active.** State packed into `input_mask` (bit i = input i+1 active) and served via `/poll` as `"inputs"`. Hardware modification required — see [doc/HW modification notes.md](doc/HW%20modification%20notes.md):
   - R47 (2 kΩ) and R106 (10 kΩ) removed from the BEEP circuit
   - PCF8574 `/INT` (open-drain, active-low) wired directly to GPIO12
