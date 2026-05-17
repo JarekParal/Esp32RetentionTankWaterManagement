@@ -60,6 +60,8 @@ HTTP surface (port 80, single-threaded `WebServer`):
 - **Doxygen `///` for public APIs.** Headers carry the contract (`@brief`, `@param`, `@return`, preconditions, lifetime caveats); `.cpp` files stay clean and don't repeat it. See [src/log_buffer.h](src/log_buffer.h) for the pattern.
 - **Top-level functions in `main.cpp` get a `///` block.** HTTP handlers state their URL and response shape in the `@brief`.
 - **Default to no inline `//` comments.** Add one only when the *why* is non-obvious — library quirk, hardware contract, or workaround.
+- **Always run clang-format before committing C++.** From the repo root (PowerShell): `& .\tools\clang-format.exe -i src\*.cpp src\*.h`. The repo vendors `tools\clang-format.exe` via LFS and the `.clang-format` at the repo root is the source of truth — Allman braces, 2-space indent, no column wrapping, no include reordering. VS Code's C/C++ extension (`ms-vscode.cpptools`) picks up the same config on save. Don't hand-tweak whitespace; let the formatter decide.
+- **Whitespace-only commits go in `.git-blame-ignore-revs`.** When a commit is pure formatting (e.g. a mass clang-format run), append its full SHA to `.git-blame-ignore-revs`. `git blame --ignore-revs-file=.git-blame-ignore-revs <file>` (and GitHub web blame) then walks past the churn to the real author. Keep logic and formatting changes in separate commits — mixed commits get logged as the blame author for the touched lines.
 
 ## Reference material
 

@@ -1,0 +1,10 @@
+# Commits to skip when running `git blame` or viewing blame on GitHub.
+# Use with: git blame --ignore-revs-file=.git-blame-ignore-revs <file>
+# GitHub picks this up automatically when it sits at the repo root.
+#
+# Only add whitespace-only / formatting commits here — never mix
+# logic and formatting in the same commit if you want blame to walk
+# through cleanly.
+
+# Apply clang-format to src/ (no logic changes)
+73b56c67c367d270079fbbf1ce9f41adc03ce72f
