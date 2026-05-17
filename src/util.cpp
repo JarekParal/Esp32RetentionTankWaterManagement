@@ -3,12 +3,11 @@
 #include <time.h>
 #include <sys/time.h>
 
-#ifndef GIT_HASH
-#define GIT_HASH "unknown"
-#endif
-#ifndef BUILD_DATE
-#define BUILD_DATE "unknown"
-#endif
+// Defined in src/build_info.cpp, regenerated on every `pio run` by
+// scripts/inject_build_info.py. Kept in a separate TU so only that .cpp
+// recompiles each build instead of every translation unit.
+extern const char *const BUILD_INFO_GIT_HASH;
+extern const char *const BUILD_INFO_BUILD_DATE;
 
 /// POSIX TZ string for the device's location. Default is Europe/Prague
 /// (CET/CEST with EU DST rules). Change here if the device runs elsewhere.
@@ -53,7 +52,7 @@ const char *util_version_string()
   static char buf[80];
   if (buf[0] == '\0')
   {
-    snprintf(buf, sizeof(buf), "v%s (%s, %s)", FIRMWARE_VERSION, GIT_HASH, BUILD_DATE);
+    snprintf(buf, sizeof(buf), "v%s (%s, %s)", FIRMWARE_VERSION, BUILD_INFO_GIT_HASH, BUILD_INFO_BUILD_DATE);
   }
   return buf;
 }
