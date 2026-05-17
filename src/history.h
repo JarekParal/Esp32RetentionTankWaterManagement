@@ -82,6 +82,13 @@ public:
   ///        in NVS. See clear_short() for behavior.
   void clear_long();
 
+  /// @brief Sum of all sample values currently held in the short ring.
+  ///        For the water meter this equals the total liters consumed in
+  ///        the short-ring window (L/min samples × 1 min each); for a
+  ///        spot signal like distance it's just a sum and rarely useful.
+  ///        Empty buckets contribute 0. Cheap — single pass over slot_count.
+  float short_window_sum() const;
+
   /// @brief Append the signal's series as a JSON object value to @p out.
   ///
   /// Format:

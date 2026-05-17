@@ -200,6 +200,20 @@ void History::clear_long()
     long_ring_->clear();
 }
 
+float History::short_window_sum() const
+{
+  if (!short_ring_ || !short_ring_->buckets)
+    return 0.0f;
+  float total = 0.0f;
+  for (size_t i = 0; i < short_ring_->slot_count; i++)
+  {
+    const Bucket &b = short_ring_->buckets[i];
+    if (b.n > 0)
+      total += b.sum_v;
+  }
+  return total;
+}
+
 void History::record(time_t now_epoch, float value)
 {
   if (now_epoch < SYNC_THRESHOLD)

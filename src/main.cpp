@@ -19,6 +19,7 @@
 #include "util.h"
 #include "history.h"
 #include "oled.h"
+#include "modbus_srv.h"
 
 constexpr int ULTRASOUND_TRIGER_PIN = 32; // RX on connector
 constexpr int ULTRASOUND_ECHO_PIN = 33;   // TX on connector
@@ -43,11 +44,13 @@ PCF8574 pcf8574_re(0x24, 4, 5);
 PCF8574 pcf8574_in(0x26, 4, 5);
 
 // ---------------- Valve state ----------------
+// Non-static so modbus_srv.cpp can reach these via extern. (Equally readable
+// over the bus and the HTTP endpoints, so they're truly shared state.)
 // bit i = valve (i+1) is OPEN. PCF8574 is active-low: write 0 to OPEN, 1 to CLOSE.
-static uint8_t relay_mask = 0;
+uint8_t relay_mask = 0;
 
 // bit i = input (i+1) is ACTIVE. PCF8574 is active-low: read 0 means active.
-static uint8_t input_mask = 0;
+uint8_t input_mask = 0;
 static volatile bool inputs_changed = false;
 
 /// @brief Drive a single valve to open or closed and log the transition.
@@ -55,7 +58,7 @@ static volatile bool inputs_changed = false;
 /// @param open `true` to open the valve, `false` to close it.
 /// @note PCF8574 is active-low — this function inverts the level so callers
 ///       can think in terms of OPEN / CLOSED.
-static void set_valve(int n, bool open)
+void set_valve(int n, bool open)
 {
   if (n < 1 || n > 8)
     return;
@@ -71,7 +74,7 @@ static void set_valve(int n, bool open)
 }
 
 // ---------------- Ultrasonic (cached) ----------------
-static float cached_distance_cm = 0.0f;
+float cached_distance_cm = 0.0f;
 static unsigned long last_distance_ms = 0;
 constexpr unsigned long DISTANCE_REFRESH_MS = 10000;
 
@@ -81,14 +84,14 @@ constexpr unsigned long OLED_REFRESH_MS = 200;
 
 // 10-min × 144 short ring = 24 h, throttled to one NVS write per hour.
 // 1-day × 30 long ring = 30 d, one NVS write per daily rollover (~1/day).
-static History distance_history(
+History distance_history(
     "dist",
     History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
     History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
 
 // Water flow rate (L/min) sampled once a minute from the pulse counter.
 // Same ring config as distance so the UI can reuse the same chart code.
-static History water_history(
+History water_history(
     "water",
     History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
     History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
@@ -105,7 +108,7 @@ constexpr unsigned long WATER_SAMPLE_MS = 60000;
 // since boot; it is not persisted across reboots (the History rings are,
 // which is where consumption-over-time data actually lives). 32 bits hold
 // ~4 billion liters; the household will run out of plumbing first.
-static uint32_t water_pulse_count = 0;
+uint32_t water_pulse_count = 0;
 
 /// @brief Read all 8 PCF8574 digital inputs, update input_mask, log transitions.
 /// @note Single Wire.requestFrom() gives an atomic snapshot and bypasses the
@@ -441,6 +444,8 @@ void setup()
   // OLED at 0x3C — shares the Wire bus already initialized by the PCF8574s.
   oled_init();
 
+  modbus_init();
+
   server.on("/", server_handle_root);
   server.on("/config.json", server_handle_config);
   server.on("/history.json", server_handle_history);
@@ -474,6 +479,7 @@ void loop()
 {
   ArduinoOTA.handle();
   server.handleClient();
+  modbus_poll();
 
   unsigned long now = millis();
   if (now - last_distance_ms >= DISTANCE_REFRESH_MS)
