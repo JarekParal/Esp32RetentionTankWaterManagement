@@ -110,6 +110,22 @@
       letter-spacing: .05em;
     }
 
+    /* Foldable sections — clicking the title row (h2 or .term-head) toggles
+       data-collapsed on the section. Caret indicator on h2 flips ▼/▶. */
+    section[data-section] { grid-column: 1 / -1; }
+    section[data-section] > :first-child { cursor: pointer; user-select: none; }
+    section[data-section] h2::after {
+      content: ' ▼';
+      font-size: 10px;
+      color: var(--muted);
+      margin-left: .4em;
+    }
+    section[data-collapsed="true"] h2::after { content: ' ▶'; }
+    section[data-collapsed="true"] { padding-bottom: 16px; }
+    section[data-collapsed="true"] > :first-child { margin-bottom: 0; }
+    section[data-collapsed="true"] .term-head { margin-bottom: 0; }
+    section[data-collapsed="true"] > *:nth-child(n+2) { display: none; }
+
     .valve-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -367,7 +383,7 @@
   </header>
 
   <main>
-    <section class="history">
+    <section class="history" data-section="distance">
       <h2>Tank Distance</h2>
       <div class="history-grid">
         <div>
@@ -389,7 +405,7 @@
       </div>
     </section>
 
-    <section class="history">
+    <section class="history" data-section="water">
       <h2>Water Consumption</h2>
       <div class="history-grid">
         <div>
@@ -411,7 +427,7 @@
       </div>
     </section>
 
-    <section>
+    <section data-section="valves">
       <div class="term-head">
         <h2>Solenoid Valves</h2>
         <button id="closeAll" class="danger">Close all</button>
@@ -419,17 +435,17 @@
       <div id="valves" class="valve-grid"></div>
     </section>
 
-    <section>
+    <section class="inputs" data-section="inputs">
+      <h2>Digital Inputs</h2>
+      <div id="inputs" class="input-grid"></div>
+    </section>
+
+    <section data-section="log">
       <div class="term-head">
         <h2>Device Log</h2>
         <button id="clearLog">Clear</button>
       </div>
       <pre id="terminal"></pre>
-    </section>
-
-    <section class="inputs">
-      <h2>Digital Inputs</h2>
-      <div id="inputs" class="input-grid"></div>
     </section>
   </main>
 
@@ -817,6 +833,22 @@
         'click', () => clearHistoryRing('water', 'short', 'water consumption', 'last 24 hours'));
       document.getElementById('clearWaterLong').addEventListener(
         'click', () => clearHistoryRing('water', 'long',  'water consumption', 'last 30 days'));
+
+      // Foldable sections. Click the title row to collapse/expand; state
+      // persists in localStorage so a reload restores what the user had open.
+      for (const sect of document.querySelectorAll('section[data-section]')) {
+        const key = `fold-${sect.dataset.section}`;
+        if (localStorage.getItem(key) === '1') sect.dataset.collapsed = 'true';
+        const head = sect.firstElementChild;
+        head.addEventListener('click', e => {
+          if (e.target.closest('button')) return; // let action buttons act on their own
+          const collapsed = sect.dataset.collapsed !== 'true';
+          if (collapsed) sect.dataset.collapsed = 'true';
+          else delete sect.dataset.collapsed;
+          localStorage.setItem(key, collapsed ? '1' : '0');
+        });
+      }
+
       document.addEventListener('visibilitychange', () => {
         paused = document.hidden;
       });
