@@ -348,6 +348,10 @@
         <strong id="level">&mdash;</strong>
       </div>
       <div class="metric">
+        <label>Distance</label>
+        <strong id="distance-raw">&mdash;</strong>
+      </div>
+      <div class="metric">
         <label>Water total</label>
         <strong id="water-total">&mdash;</strong>
       </div>
@@ -454,6 +458,7 @@
       const $terminal = document.getElementById('terminal');
       const $level = document.getElementById('level');
       const $levelLabel = document.getElementById('level-label');
+      const $distanceRaw = document.getElementById('distance-raw');
       const $uptime = document.getElementById('uptime');
       const $conn = document.getElementById('conn');
       const $version = document.getElementById('version');
@@ -636,6 +641,8 @@
           }
           if (json.distance_cm !== undefined) {
             $level.textContent = formatLevel(json.distance_cm);
+            $distanceRaw.textContent = Number.isFinite(json.distance_cm)
+              ? `${json.distance_cm.toFixed(1)} cm` : '—';
           }
           if (typeof json.water_pulses === 'number') {
             $waterTotal.textContent = `${json.water_pulses} L`;
