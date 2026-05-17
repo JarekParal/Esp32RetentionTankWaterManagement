@@ -31,12 +31,13 @@ struct History::Ring
   uint32_t period_sec;
   size_t slot_count;
   Bucket *buckets;          // owned heap buffer, slot_count entries
-  uint32_t min_persist_sec; // 0 = flush on every rollover
+  uint32_t min_persist_sec; // 0 = flush on every bucket transition
   time_t last_persist_epoch;
+  uint32_t last_t_unit; // most recent sample's t_unit; 0 = none since boot
 
   Ring(const char *ns_, const char *key_,
        uint32_t period_sec_, size_t slot_count_, uint32_t min_persist_sec_)
-      : ns(ns_), key(key_), period_sec(period_sec_), slot_count(slot_count_), buckets(new (std::nothrow) Bucket[slot_count_]()), min_persist_sec(min_persist_sec_), last_persist_epoch(0)
+      : ns(ns_), key(key_), period_sec(period_sec_), slot_count(slot_count_), buckets(new (std::nothrow) Bucket[slot_count_]()), min_persist_sec(min_persist_sec_), last_persist_epoch(0), last_t_unit(0)
   {
   }
 
@@ -86,13 +87,18 @@ struct History::Ring
   {
     if (!buckets)
       return;
-    Bucket &b = buckets[t_unit_now % slot_count];
-    const bool rollover = (b.n > 0 && b.t_unit != t_unit_now);
-    if (rollover && !throttled(now_epoch))
+    // Persist whenever t_unit advances — the previous bucket is now complete
+    // and won't change. Slot-wraparound is just one special case of this and
+    // wouldn't fire for the first slot_count periods after boot, leaving up
+    // to a full ring's worth of data unsaved until the first slot is reused.
+    if (last_t_unit != 0 && last_t_unit != t_unit_now && !throttled(now_epoch))
     {
       persist();
       last_persist_epoch = now_epoch;
     }
+    last_t_unit = t_unit_now;
+
+    Bucket &b = buckets[t_unit_now % slot_count];
     if (b.n == 0 || b.t_unit != t_unit_now)
     {
       b.t_unit = t_unit_now;
@@ -122,6 +128,7 @@ struct History::Ring
       }
     }
     last_persist_epoch = 0;
+    last_t_unit = 0;
     Preferences prefs;
     if (prefs.begin(ns, /*readOnly=*/false))
     {
