@@ -300,15 +300,31 @@
     .chart {
       display: block;
       width: 100%;
-      height: 110px;
+      aspect-ratio: 320 / 110;
+      height: auto;
       background: var(--panel2);
       border: 1px solid var(--border);
       border-radius: 4px;
+      touch-action: pan-y;
     }
-    .chart-range  { stroke: var(--muted); stroke-width: 0.6; opacity: 0.45; }
-    .chart-line   { fill: none; stroke: var(--accent); stroke-width: 1; }
-    .chart-dot    { fill: var(--accent); }
-    .chart-empty  { fill: var(--muted); font-size: 5px; }
+    .chart-range    { stroke: var(--muted); stroke-width: 0.6; opacity: 0.45; }
+    .chart-line     { fill: none; stroke: var(--accent); stroke-width: 1; }
+    .chart-dot      { fill: var(--accent); }
+    .chart-empty    { fill: var(--muted); font-size: 6px; }
+    .chart-axis line          { stroke: var(--muted); stroke-width: 0.3; opacity: 0.55; }
+    .chart-axis text          { fill: var(--muted); font-size: 5.5px; font-variant-numeric: tabular-nums; }
+    .chart-axis .axis-grid    { stroke-dasharray: 1 1.5; opacity: 0.25; }
+    .chart-hit                { fill: transparent; cursor: crosshair; }
+    .chart-crosshair          { stroke: var(--accent); stroke-width: 0.4; opacity: 0.6; }
+    .chart-readout-bg         { fill: var(--panel); stroke: var(--border); stroke-width: 0.3; opacity: 0.96; }
+    .chart-readout text       { fill: var(--text); font-size: 5px; font-variant-numeric: tabular-nums; }
+    .chart-readout .ro-title  { font-weight: 600; }
+    .chart-readout-pin .chart-readout-bg { stroke: var(--accent); stroke-width: 0.6; opacity: 1; }
+    .chart-readout-pin .ro-close { fill: var(--accent); cursor: pointer; pointer-events: auto; font-weight: 700; }
+    .chart-hilite-dot         { fill: var(--accent); stroke: var(--panel); stroke-width: 0.4; }
+    @media (max-width: 640px) {
+      .chart-axis-secondary   { display: none; }
+    }
 
     section.inputs { grid-column: 1 / -1; }
     .input-grid {
@@ -392,7 +408,7 @@
             <span class="range" id="range-24h">&mdash;</span>
             <button id="clearShort" class="danger" type="button">Clear 24h</button>
           </div>
-          <svg id="chart-24h" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+          <svg id="chart-24h" class="chart" viewBox="0 0 320 110"></svg>
         </div>
         <div>
           <div class="chart-title">
@@ -400,7 +416,7 @@
             <span class="range" id="range-30d">&mdash;</span>
             <button id="clearLong" class="danger" type="button">Clear 30d</button>
           </div>
-          <svg id="chart-30d" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+          <svg id="chart-30d" class="chart" viewBox="0 0 320 110"></svg>
         </div>
       </div>
     </section>
@@ -414,7 +430,7 @@
             <span class="range" id="water-range-24h">&mdash;</span>
             <button id="clearWaterShort" class="danger" type="button">Clear 24h</button>
           </div>
-          <svg id="water-chart-24h" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+          <svg id="water-chart-24h" class="chart" viewBox="0 0 320 110"></svg>
         </div>
         <div>
           <div class="chart-title">
@@ -422,7 +438,7 @@
             <span class="range" id="water-range-30d">&mdash;</span>
             <button id="clearWaterLong" class="danger" type="button">Clear 30d</button>
           </div>
-          <svg id="water-chart-30d" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+          <svg id="water-chart-30d" class="chart" viewBox="0 0 320 110"></svg>
         </div>
       </div>
     </section>
@@ -542,6 +558,12 @@
         const range = tankCal.empty_cm - tankCal.full_cm;
         const pct = (tankCal.empty_cm - cm) / range * 100;
         return Math.max(0, Math.min(100, pct));
+      }
+
+      function fullnessToDistance(pct) {
+        if (!tankCal) return null;
+        const range = tankCal.empty_cm - tankCal.full_cm;
+        return tankCal.empty_cm - (pct / 100) * range;
       }
 
       function formatLevel(cm) {
@@ -675,7 +697,49 @@
         }
       }
 
-      function renderChart(svg, $range, $window, ring, transform, unit) {
+      // Pin state per chart, keyed by SVG element. Stored as bucket timestamp
+      // so it survives re-renders (the ring rolls every poll, so an index would
+      // drift).
+      const chartPins = new WeakMap();
+
+      function niceTicks(min, max, target) {
+        const range = max - min;
+        if (!Number.isFinite(range) || range <= 0) return { ticks: [min], step: 1 };
+        const rough = range / target;
+        const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+        const norm = rough / mag;
+        let step;
+        if (norm < 1.5)      step = 1 * mag;
+        else if (norm < 3)   step = 2 * mag;
+        else if (norm < 7)   step = 5 * mag;
+        else                 step = 10 * mag;
+        const ticks = [];
+        const first = Math.ceil(min / step - 1e-9) * step;
+        for (let v = first; v <= max + 1e-9; v += step) ticks.push(v);
+        return { ticks, step };
+      }
+
+      function fmtTick(v, step) {
+        const decimals = step >= 10 ? 0 : step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+        // Hide negative-zero artefacts from floating-point step accumulation.
+        if (Math.abs(v) < step * 1e-6) v = 0;
+        return v.toFixed(decimals);
+      }
+
+      function fmtMMDD(date) {
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${m}-${d}`;
+      }
+
+      function svgEl(tag, attrs) {
+        const el = document.createElementNS(SVG_NS, tag);
+        if (attrs) for (const k in attrs) el.setAttribute(k, attrs[k]);
+        return el;
+      }
+
+      function renderChart(svg, $range, $window, ring, transform, unit, opts) {
+        opts = opts || {};
         while (svg.firstChild) svg.removeChild(svg.firstChild);
         if (!ring || !Array.isArray(ring.buckets)) return;
         $window.textContent = describeWindow(ring.period_sec, ring.buckets.length);
@@ -685,95 +749,329 @@
         const project = b => {
           const a = transform(b.avg);
           const lo1 = transform(b.min), lo2 = transform(b.max);
-          return { avg: a, lo: Math.min(lo1, lo2), hi: Math.max(lo1, lo2), n: b.n, t: b.t,
+          return { avg: a, lo: Math.min(lo1, lo2), hi: Math.max(lo1, lo2),
+                   n: b.n, t: b.t,
                    rawMin: b.min, rawMax: b.max, rawAvg: b.avg };
         };
 
-        const filled = ring.buckets.filter(b => b && b.n > 0).map(project);
+        const filled = [];
+        for (let i = 0; i < ring.buckets.length; i++) {
+          const raw = ring.buckets[i];
+          if (raw && raw.n > 0) filled.push({ idx: i, b: project(raw), raw });
+        }
         if (filled.length === 0) {
-          const t = document.createElementNS(SVG_NS, 'text');
-          t.setAttribute('x', '50%');
-          t.setAttribute('y', '50%');
-          t.setAttribute('text-anchor', 'middle');
-          t.setAttribute('dominant-baseline', 'middle');
-          t.setAttribute('class', 'chart-empty');
-          t.textContent = 'No data yet';
-          svg.appendChild(t);
+          svg.appendChild(svgEl('text', {
+            x: '50%', y: '50%', 'text-anchor': 'middle',
+            'dominant-baseline': 'middle', class: 'chart-empty',
+          })).textContent = 'No data yet';
           $range.textContent = '—';
           return;
         }
 
         let yMin = Infinity, yMax = -Infinity;
-        for (const b of filled) {
-          if (b.lo < yMin) yMin = b.lo;
-          if (b.hi > yMax) yMax = b.hi;
+        for (const f of filled) {
+          if (f.b.lo < yMin) yMin = f.b.lo;
+          if (f.b.hi > yMax) yMax = f.b.hi;
         }
         $range.textContent = `${yMin.toFixed(1)} – ${yMax.toFixed(1)} ${unit}`;
         const yPad = Math.max((yMax - yMin) * 0.08, 0.2);
         yMin -= yPad; yMax += yPad;
         const yScale = yMax - yMin || 1;
 
-        const vbW = 240, vbH = 80;
-        const padX = 3, padY = 4;
-        const w = vbW - padX * 2;
-        const h = vbH - padY * 2;
-        const cellW = w / ring.buckets.length;
-        const yPos = v => padY + h * (1 - (v - yMin) / yScale);
-        const periodSec = ring.period_sec;
+        // Layout. Wider left margin holds Y labels; right margin only when a
+        // secondary axis is requested (distance charts with calibration).
+        const vbW = 320, vbH = 110;
+        const useSecondary = !!opts.secondaryFromPrimary;
+        const padLeft = 22, padRight = useSecondary ? 22 : 4;
+        const padTop = 4,  padBottom = 14;
+        const plotX0 = padLeft, plotY0 = padTop;
+        const plotW = vbW - padLeft - padRight;
+        const plotH = vbH - padTop - padBottom;
+        const cellW = plotW / ring.buckets.length;
+        const yPos  = v => plotY0 + plotH * (1 - (v - yMin) / yScale);
+        const xPos  = idx => plotX0 + idx * cellW + cellW / 2;
 
-        // First pass — min/max range bars.
-        for (let i = 0; i < ring.buckets.length; i++) {
-          const raw = ring.buckets[i];
-          if (!raw || raw.n === 0) continue;
-          const b = project(raw);
-          const x = padX + i * cellW + cellW / 2;
-          const line = document.createElementNS(SVG_NS, 'line');
-          line.setAttribute('x1', x.toFixed(2));
-          line.setAttribute('x2', x.toFixed(2));
-          line.setAttribute('y1', yPos(b.hi).toFixed(2));
-          line.setAttribute('y2', yPos(b.lo).toFixed(2));
-          line.setAttribute('class', 'chart-range');
-          svg.appendChild(line);
+        // --- Y axis (primary, left) -----------------------------------------
+        const yTickInfo = niceTicks(yMin + yPad, yMax - yPad, 4);
+        const yAxisG = svgEl('g', { class: 'chart-axis' });
+        for (const v of yTickInfo.ticks) {
+          if (v < yMin || v > yMax) continue;
+          const y = yPos(v);
+          yAxisG.appendChild(svgEl('line', {
+            x1: plotX0, x2: plotX0 + plotW, y1: y.toFixed(2), y2: y.toFixed(2),
+            class: 'axis-grid',
+          }));
+          const t = svgEl('text', {
+            x: (plotX0 - 2).toFixed(2), y: y.toFixed(2),
+            'text-anchor': 'end', 'dominant-baseline': 'middle',
+          });
+          t.textContent = fmtTick(v, yTickInfo.step);
+          yAxisG.appendChild(t);
+        }
+        // Unit label at top-left.
+        const unitLabel = svgEl('text', {
+          x: (plotX0 - 2).toFixed(2), y: (plotY0 - 0.5).toFixed(2),
+          'text-anchor': 'end', 'dominant-baseline': 'baseline',
+        });
+        unitLabel.textContent = unit;
+        yAxisG.appendChild(unitLabel);
+        svg.appendChild(yAxisG);
+
+        // --- Y axis (secondary, right) --------------------------------------
+        if (useSecondary) {
+          const yAxisR = svgEl('g', { class: 'chart-axis chart-axis-secondary' });
+          for (const v of yTickInfo.ticks) {
+            if (v < yMin || v > yMax) continue;
+            const sv = opts.secondaryFromPrimary(v);
+            if (!Number.isFinite(sv)) continue;
+            const y = yPos(v);
+            const t = svgEl('text', {
+              x: (plotX0 + plotW + 2).toFixed(2), y: y.toFixed(2),
+              'text-anchor': 'start', 'dominant-baseline': 'middle',
+            });
+            t.textContent = sv.toFixed(0);
+            yAxisR.appendChild(t);
+          }
+          const secLabel = svgEl('text', {
+            x: (plotX0 + plotW + 2).toFixed(2), y: (plotY0 - 0.5).toFixed(2),
+            'text-anchor': 'start', 'dominant-baseline': 'baseline',
+          });
+          secLabel.textContent = opts.secondaryUnit || '';
+          yAxisR.appendChild(secLabel);
+          svg.appendChild(yAxisR);
         }
 
-        // Second pass — avg polyline.
-        const pts = [];
-        for (let i = 0; i < ring.buckets.length; i++) {
-          const raw = ring.buckets[i];
-          if (!raw || raw.n === 0) continue;
-          const b = project(raw);
-          const x = padX + i * cellW + cellW / 2;
-          pts.push(`${x.toFixed(2)},${yPos(b.avg).toFixed(2)}`);
-        }
-        if (pts.length > 1) {
-          const poly = document.createElementNS(SVG_NS, 'polyline');
-          poly.setAttribute('points', pts.join(' '));
-          poly.setAttribute('class', 'chart-line');
-          svg.appendChild(poly);
-        }
+        // --- X axis ---------------------------------------------------------
+        // Anchor the time→x mapping using any non-empty bucket. Times in the
+        // ring are local-wall-clock unix seconds; we step ticks in real time
+        // and project them back to bucket index space.
+        const xAxisG = svgEl('g', { class: 'chart-axis' });
+        xAxisG.appendChild(svgEl('line', {
+          x1: plotX0, x2: plotX0 + plotW,
+          y1: (plotY0 + plotH).toFixed(2), y2: (plotY0 + plotH).toFixed(2),
+        }));
+        const anchor = filled[0];
+        if (anchor) {
+          // b.t from the server is the bucket left-edge (period-aligned floor
+          // of epoch). xPos(idx) draws at the bucket center, so wall-clock t
+          // (a left-edge) projects via (-0.5) into cell-index space.
+          const tStart = anchor.b.t - anchor.idx * ring.period_sec;
+          const tEnd   = tStart + ring.buckets.length * ring.period_sec;
+          const timeToX = t => xPos((t - anchor.b.t) / ring.period_sec + anchor.idx - 0.5);
+          const isDayLevel = ring.period_sec >= 86400;
 
-        // Third pass — avg dots with tooltips.
-        for (let i = 0; i < ring.buckets.length; i++) {
-          const raw = ring.buckets[i];
-          if (!raw || raw.n === 0) continue;
-          const b = project(raw);
-          const x = padX + i * cellW + cellW / 2;
-          const c = document.createElementNS(SVG_NS, 'circle');
-          c.setAttribute('cx', x.toFixed(2));
-          c.setAttribute('cy', yPos(b.avg).toFixed(2));
-          c.setAttribute('r', '0.8');
-          c.setAttribute('class', 'chart-dot');
+          if (isDayLevel) {
+            // ~5-day ticks aligned to local midnight.
+            const d = new Date(tStart * 1000);
+            d.setHours(0, 0, 0, 0);
+            let cur = d.getTime();
+            while (cur / 1000 < tStart) cur += 86400 * 1000;
+            while (cur / 1000 <= tEnd) {
+              const t = cur / 1000;
+              const x = timeToX(t);
+              if (x >= plotX0 - 0.5 && x <= plotX0 + plotW + 0.5) {
+                xAxisG.appendChild(svgEl('line', {
+                  x1: x.toFixed(2), x2: x.toFixed(2),
+                  y1: (plotY0 + plotH).toFixed(2),
+                  y2: (plotY0 + plotH + 2).toFixed(2),
+                }));
+                const tx = svgEl('text', {
+                  x: x.toFixed(2), y: (plotY0 + plotH + 7).toFixed(2),
+                  'text-anchor': 'middle',
+                });
+                tx.textContent = fmtMMDD(new Date(t * 1000));
+                xAxisG.appendChild(tx);
+              }
+              cur += 5 * 86400 * 1000;
+            }
+          } else {
+            // 4-hour ticks aligned to local wall-clock.
+            const d = new Date(tStart * 1000);
+            d.setMinutes(0, 0, 0);
+            let cur = d.getTime();
+            while (cur / 1000 < tStart) cur += 3600 * 1000;
+            while (cur / 1000 <= tEnd) {
+              const dd = new Date(cur);
+              if (dd.getHours() % 4 === 0) {
+                const t = cur / 1000;
+                const x = timeToX(t);
+                if (x >= plotX0 - 0.5 && x <= plotX0 + plotW + 0.5) {
+                  xAxisG.appendChild(svgEl('line', {
+                    x1: x.toFixed(2), x2: x.toFixed(2),
+                    y1: (plotY0 + plotH).toFixed(2),
+                    y2: (plotY0 + plotH + 2).toFixed(2),
+                  }));
+                  const tx = svgEl('text', {
+                    x: x.toFixed(2), y: (plotY0 + plotH + 7).toFixed(2),
+                    'text-anchor': 'middle',
+                  });
+                  tx.textContent = String(dd.getHours()).padStart(2, '0') + ':00';
+                  xAxisG.appendChild(tx);
+                }
+              }
+              cur += 3600 * 1000;
+            }
+          }
+        }
+        svg.appendChild(xAxisG);
 
-          const date = new Date(b.t * 1000);
-          const label = periodSec >= 86400
+        // --- Data layers: range bars, polyline, dots ------------------------
+        const dataG = svgEl('g', {});
+        for (const f of filled) {
+          const x = xPos(f.idx);
+          dataG.appendChild(svgEl('line', {
+            x1: x.toFixed(2), x2: x.toFixed(2),
+            y1: yPos(f.b.hi).toFixed(2), y2: yPos(f.b.lo).toFixed(2),
+            class: 'chart-range',
+          }));
+        }
+        if (filled.length > 1) {
+          const pts = filled.map(f => `${xPos(f.idx).toFixed(2)},${yPos(f.b.avg).toFixed(2)}`);
+          dataG.appendChild(svgEl('polyline', {
+            points: pts.join(' '),
+            class: 'chart-line',
+          }));
+        }
+        for (const f of filled) {
+          dataG.appendChild(svgEl('circle', {
+            cx: xPos(f.idx).toFixed(2), cy: yPos(f.b.avg).toFixed(2),
+            r: '0.9', class: 'chart-dot',
+          }));
+        }
+        svg.appendChild(dataG);
+
+        // --- Interaction overlay: hit area + crosshair + readout ------------
+        const hit = svgEl('rect', {
+          x: plotX0, y: plotY0, width: plotW, height: plotH, class: 'chart-hit',
+        });
+        svg.appendChild(hit);
+
+        const overlay = svgEl('g', {});
+        overlay.style.pointerEvents = 'none';
+        svg.appendChild(overlay);
+
+        const drawReadout = (f, pinned) => {
+          while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+          const x = xPos(f.idx);
+          const yAvg = yPos(f.b.avg);
+
+          // Crosshair vertical line.
+          overlay.appendChild(svgEl('line', {
+            x1: x.toFixed(2), x2: x.toFixed(2),
+            y1: plotY0, y2: (plotY0 + plotH).toFixed(2),
+            class: 'chart-crosshair',
+          }));
+          // Highlight dot.
+          overlay.appendChild(svgEl('circle', {
+            cx: x.toFixed(2), cy: yAvg.toFixed(2),
+            r: '1.6', class: 'chart-hilite-dot',
+          }));
+
+          // Readout box.
+          const date = new Date(f.b.t * 1000);
+          const isDay = ring.period_sec >= 86400;
+          const timeLabel = isDay
             ? date.toLocaleDateString()
-            : date.toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
-          const title = document.createElementNS(SVG_NS, 'title');
-          title.textContent =
-            `${label}: avg ${b.avg.toFixed(1)} ${unit}` +
-            ` (min ${b.lo.toFixed(1)} / max ${b.hi.toFixed(1)} / n=${b.n})`;
-          c.appendChild(title);
-          svg.appendChild(c);
+            : date.toLocaleString([], { hour: '2-digit', minute: '2-digit',
+                                        day: 'numeric', month: 'short' });
+          const lineAvg = `avg ${f.b.avg.toFixed(1)} ${unit}`;
+          const lineRng = `${f.b.lo.toFixed(1)} – ${f.b.hi.toFixed(1)} ${unit}`;
+          const lineN   = `n = ${f.b.n}`;
+          const lineSec = useSecondary
+            ? `${opts.secondaryFromPrimary(f.b.avg).toFixed(0)} ${opts.secondaryUnit || ''}`.trim()
+            : null;
+
+          const lines = [timeLabel, lineAvg, lineRng, lineN];
+          if (lineSec) lines.splice(2, 0, lineSec);
+
+          const boxW = 56, lineH = 6;
+          const boxH = lines.length * lineH + 4 + (pinned ? 0 : 0);
+          // Flip left/right so the box stays inside the plot area.
+          let boxX = x + 2;
+          if (boxX + boxW > plotX0 + plotW) boxX = x - 2 - boxW;
+          let boxY = plotY0 + 2;
+          if (boxY + boxH > plotY0 + plotH - 2) boxY = plotY0 + plotH - 2 - boxH;
+
+          const ro = svgEl('g', { class: 'chart-readout' + (pinned ? ' chart-readout-pin' : '') });
+          ro.appendChild(svgEl('rect', {
+            x: boxX.toFixed(2), y: boxY.toFixed(2),
+            width: boxW, height: boxH, rx: 1.5, ry: 1.5,
+            class: 'chart-readout-bg',
+          }));
+          for (let i = 0; i < lines.length; i++) {
+            const t = svgEl('text', {
+              x: (boxX + 2).toFixed(2),
+              y: (boxY + 4 + i * lineH).toFixed(2),
+              class: i === 0 ? 'ro-title' : '',
+            });
+            t.textContent = lines[i];
+            ro.appendChild(t);
+          }
+          if (pinned) {
+            const close = svgEl('text', {
+              x: (boxX + boxW - 2).toFixed(2),
+              y: (boxY + 4).toFixed(2),
+              'text-anchor': 'end',
+              class: 'ro-close',
+            });
+            close.textContent = '×';
+            close.addEventListener('click', e => {
+              e.stopPropagation();
+              chartPins.delete(svg);
+              while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+            });
+            ro.appendChild(close);
+          }
+          overlay.appendChild(ro);
+        };
+
+        const snapToBucket = clientX => {
+          const rect = svg.getBoundingClientRect();
+          if (rect.width === 0) return null;
+          const xUser = (clientX - rect.left) / rect.width * vbW;
+          if (xUser < plotX0 || xUser > plotX0 + plotW) return null;
+          // Find filled bucket whose center is closest.
+          let best = null, bestDx = Infinity;
+          for (const f of filled) {
+            const dx = Math.abs(xPos(f.idx) - xUser);
+            if (dx < bestDx) { bestDx = dx; best = f; }
+          }
+          return best;
+        };
+
+        hit.addEventListener('pointermove', e => {
+          if (chartPins.has(svg)) return;  // pinned readout has priority
+          const f = snapToBucket(e.clientX);
+          if (f) drawReadout(f, false);
+        });
+        hit.addEventListener('pointerleave', () => {
+          if (chartPins.has(svg)) return;
+          while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+        });
+        hit.addEventListener('click', e => {
+          const f = snapToBucket(e.clientX);
+          if (!f) return;
+          // Toggle: clicking the same pinned bucket clears the pin.
+          const existing = chartPins.get(svg);
+          if (existing && existing.t === f.b.t) {
+            chartPins.delete(svg);
+            while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+            return;
+          }
+          chartPins.set(svg, { t: f.b.t });
+          drawReadout(f, true);
+        });
+
+        // Re-apply pin after re-render. Match by timestamp; if the pinned
+        // bucket has rolled out of the ring, drop the pin.
+        const pin = chartPins.get(svg);
+        if (pin) {
+          let match = null;
+          for (const f of filled) {
+            if (f.b.t === pin.t) { match = f; break; }
+          }
+          if (match) drawReadout(match, true);
+          else chartPins.delete(svg);
         }
       }
 
@@ -786,8 +1084,11 @@
           if (dist) {
             const transform = tankCal ? distanceToFullness : v => v;
             const unit      = tankCal ? '%' : 'cm';
-            renderChart($chart24h, $range24h, $window24h, dist.short, transform, unit);
-            renderChart($chart30d, $range30d, $window30d, dist.long,  transform, unit);
+            const distOpts  = tankCal
+              ? { secondaryFromPrimary: fullnessToDistance, secondaryUnit: 'cm' }
+              : undefined;
+            renderChart($chart24h, $range24h, $window24h, dist.short, transform, unit, distOpts);
+            renderChart($chart30d, $range30d, $window30d, dist.long,  transform, unit, distOpts);
           }
           const water = data?.water;
           if (water) {
