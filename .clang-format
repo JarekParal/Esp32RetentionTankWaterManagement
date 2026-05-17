@@ -1,0 +1,16 @@
+---
+Language: Cpp
+BasedOnStyle: Microsoft
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 4
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+PointerAlignment: Right
+Cpp11BracedListStyle: true
+ColumnLimit: 0
+SortIncludes: false

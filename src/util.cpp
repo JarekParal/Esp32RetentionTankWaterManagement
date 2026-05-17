@@ -32,14 +32,18 @@ void util_init_time()
 
 void util_format_timestamp(char *buf, size_t bufsize)
 {
-  if (bufsize == 0) return;
+  if (bufsize == 0)
+    return;
 
   time_t now = time(nullptr);
-  if (now > TIME_SYNCED_THRESHOLD) {
+  if (now > TIME_SYNCED_THRESHOLD)
+  {
     struct tm tm_local;
     localtime_r(&now, &tm_local);
     strftime(buf, bufsize, "%Y-%m-%d %H:%M:%S", &tm_local);
-  } else {
+  }
+  else
+  {
     snprintf(buf, bufsize, "boot+%lus", (unsigned long)(millis() / 1000));
   }
 }
@@ -47,7 +51,8 @@ void util_format_timestamp(char *buf, size_t bufsize)
 const char *util_version_string()
 {
   static char buf[80];
-  if (buf[0] == '\0') {
+  if (buf[0] == '\0')
+  {
     snprintf(buf, sizeof(buf), "v%s (%s, %s)", FIRMWARE_VERSION, GIT_HASH, BUILD_DATE);
   }
   return buf;

@@ -28,7 +28,8 @@
 ///   void setup()  { tank_level.begin(); }
 ///   void loop()   { tank_level.record(time(nullptr), distance_cm); }
 /// @endcode
-class History {
+class History
+{
 public:
   /// Bucket period, slot count, and an optional NVS write-throttle for one
   /// resolution level.
@@ -39,14 +40,15 @@ public:
   /// last successful write. The completed bucket stays in RAM either way;
   /// the trade-off is purely between NVS wear and how much recent state a
   /// reboot/crash can lose.
-  struct RingConfig {
+  struct RingConfig
+  {
     uint32_t period_sec;
-    size_t   slot_count;
+    size_t slot_count;
     uint32_t min_persist_sec;
 
     RingConfig(uint32_t period_sec_, size_t slot_count_, uint32_t min_persist_sec_ = 0)
-      : period_sec(period_sec_), slot_count(slot_count_),
-        min_persist_sec(min_persist_sec_) {}
+        : period_sec(period_sec_), slot_count(slot_count_),
+          min_persist_sec(min_persist_sec_) {}
   };
 
   /// @param signal_id NVS namespace; must be unique per instance and live
@@ -56,7 +58,7 @@ public:
   History(const char *signal_id, RingConfig short_cfg, RingConfig long_cfg);
   ~History();
 
-  History(const History &)            = delete;
+  History(const History &) = delete;
   History &operator=(const History &) = delete;
 
   /// @brief Load persisted state from NVS. Idempotent; call once at boot.
@@ -83,7 +85,7 @@ public:
   void serialize(String &out) const;
 
 private:
-  struct Ring;       // defined in history.cpp
+  struct Ring; // defined in history.cpp
   Ring *short_ring_;
   Ring *long_ring_;
 };
