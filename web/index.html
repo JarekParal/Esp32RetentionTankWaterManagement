@@ -348,6 +348,14 @@
         <strong id="level">&mdash;</strong>
       </div>
       <div class="metric">
+        <label>Water total</label>
+        <strong id="water-total">&mdash;</strong>
+      </div>
+      <div class="metric">
+        <label>Water (24h)</label>
+        <strong id="water-24h">&mdash;</strong>
+      </div>
+      <div class="metric">
         <label>Uptime</label>
         <strong id="uptime">&mdash;</strong>
       </div>
@@ -373,6 +381,28 @@
             <button id="clearLong" class="danger" type="button">Clear 30d</button>
           </div>
           <svg id="chart-30d" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+    </section>
+
+    <section class="history">
+      <h2>Water Consumption</h2>
+      <div class="history-grid">
+        <div>
+          <div class="chart-title">
+            <span id="water-window-24h">Last 24 hours</span>
+            <span class="range" id="water-range-24h">&mdash;</span>
+            <button id="clearWaterShort" class="danger" type="button">Clear 24h</button>
+          </div>
+          <svg id="water-chart-24h" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
+        </div>
+        <div>
+          <div class="chart-title">
+            <span id="water-window-30d">Last 30 days</span>
+            <span class="range" id="water-range-30d">&mdash;</span>
+            <button id="clearWaterLong" class="danger" type="button">Clear 30d</button>
+          </div>
+          <svg id="water-chart-30d" class="chart" viewBox="0 0 240 80" preserveAspectRatio="none"></svg>
         </div>
       </div>
     </section>
@@ -435,6 +465,14 @@
       const $range30d = document.getElementById('range-30d');
       const $window24h = document.getElementById('window-24h');
       const $window30d = document.getElementById('window-30d');
+      const $waterTotal = document.getElementById('water-total');
+      const $water24h = document.getElementById('water-24h');
+      const $waterChart24h = document.getElementById('water-chart-24h');
+      const $waterChart30d = document.getElementById('water-chart-30d');
+      const $waterRange24h = document.getElementById('water-range-24h');
+      const $waterRange30d = document.getElementById('water-range-30d');
+      const $waterWindow24h = document.getElementById('water-window-24h');
+      const $waterWindow30d = document.getElementById('water-window-30d');
 
       function escapeHtml(s) {
         return String(s)
@@ -599,6 +637,9 @@
           if (json.distance_cm !== undefined) {
             $level.textContent = formatLevel(json.distance_cm);
           }
+          if (typeof json.water_pulses === 'number') {
+            $waterTotal.textContent = `${json.water_pulses} L`;
+          }
           if (json.uptime_ms !== undefined) {
             $uptime.textContent = formatUptime(json.uptime_ms);
           }
@@ -719,11 +760,28 @@
           if (!res.ok) return;
           const data = await res.json();
           const dist = data?.distance;
-          if (!dist) return;
-          const transform = tankCal ? distanceToFullness : v => v;
-          const unit      = tankCal ? '%' : 'cm';
-          renderChart($chart24h, $range24h, $window24h, dist.short, transform, unit);
-          renderChart($chart30d, $range30d, $window30d, dist.long,  transform, unit);
+          if (dist) {
+            const transform = tankCal ? distanceToFullness : v => v;
+            const unit      = tankCal ? '%' : 'cm';
+            renderChart($chart24h, $range24h, $window24h, dist.short, transform, unit);
+            renderChart($chart30d, $range30d, $window30d, dist.long,  transform, unit);
+          }
+          const water = data?.water;
+          if (water) {
+            // Flow-rate sample is L/min, recorded once a minute from the pulse counter.
+            renderChart($waterChart24h, $waterRange24h, $waterWindow24h, water.short, v => v, 'L/min');
+            renderChart($waterChart30d, $waterRange30d, $waterWindow30d, water.long,  v => v, 'L/min');
+            // Total liters in the last 24 h = sum over short-ring buckets of
+            // (avg L/min × n samples). Each sample covers one minute, so that
+            // product is the literal liter count contributed by that bucket.
+            if (water.short && Array.isArray(water.short.buckets)) {
+              let total = 0;
+              for (const b of water.short.buckets) {
+                if (b && b.n > 0 && Number.isFinite(b.avg)) total += b.avg * b.n;
+              }
+              $water24h.textContent = `${Math.round(total)} L`;
+            }
+          }
         } catch (_e) { /* keep last render */ }
       }
 
@@ -732,11 +790,12 @@
       });
       document.getElementById('closeAll').addEventListener('click', closeAll);
 
-      async function clearHistoryRing(ring, humanLabel) {
-        if (!window.confirm(`Clear the ${humanLabel} of history data?`)) return;
-        if (!window.confirm(`This permanently erases ${humanLabel} of stored measurements from device flash. Continue?`)) return;
+      async function clearHistoryRing(signal, ring, signalHuman, ringHuman) {
+        if (!window.confirm(`Clear the ${ringHuman} of ${signalHuman} history?`)) return;
+        if (!window.confirm(`This permanently erases ${ringHuman} of stored ${signalHuman} data from device flash. Continue?`)) return;
         try {
-          const res = await fetch(`/history/clear?ring=${encodeURIComponent(ring)}`);
+          const url = `/history/clear?signal=${encodeURIComponent(signal)}&ring=${encodeURIComponent(ring)}`;
+          const res = await fetch(url);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           await pollHistory();
         } catch (e) {
@@ -744,9 +803,13 @@
         }
       }
       document.getElementById('clearShort').addEventListener(
-        'click', () => clearHistoryRing('short', 'last 24 hours'));
+        'click', () => clearHistoryRing('distance', 'short', 'tank distance', 'last 24 hours'));
       document.getElementById('clearLong').addEventListener(
-        'click', () => clearHistoryRing('long', 'last 30 days'));
+        'click', () => clearHistoryRing('distance', 'long',  'tank distance', 'last 30 days'));
+      document.getElementById('clearWaterShort').addEventListener(
+        'click', () => clearHistoryRing('water', 'short', 'water consumption', 'last 24 hours'));
+      document.getElementById('clearWaterLong').addEventListener(
+        'click', () => clearHistoryRing('water', 'long',  'water consumption', 'last 30 days'));
       document.addEventListener('visibilitychange', () => {
         paused = document.hidden;
       });

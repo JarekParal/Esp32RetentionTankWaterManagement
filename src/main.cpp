@@ -86,7 +86,26 @@ static History distance_history(
     History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
     History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
 
+// Water flow rate (L/min) sampled once a minute from the pulse counter.
+// Same ring config as distance so the UI can reuse the same chart code.
+static History water_history(
+    "water",
+    History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
+    History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
+
+// Flow-rate sampler state. Every WATER_SAMPLE_MS we record the number of
+// pulses received in the last window as one L/min sample.
+static unsigned long last_water_sample_ms = 0;
+static uint32_t last_water_pulse_count = 0;
+constexpr unsigned long WATER_SAMPLE_MS = 60000;
+
 // ---------------- Digital inputs (PCF8574 @ 0x26, /INT → GPIO12) ----------------
+
+// Water meter on Input 1 — one rising edge = one liter. Counter is lifetime
+// since boot; it is not persisted across reboots (the History rings are,
+// which is where consumption-over-time data actually lives). 32 bits hold
+// ~4 billion liters; the household will run out of plumbing first.
+static uint32_t water_pulse_count = 0;
 
 /// @brief Read all 8 PCF8574 digital inputs, update input_mask, log transitions.
 /// @note Single Wire.requestFrom() gives an atomic snapshot and bypasses the
@@ -106,6 +125,9 @@ static void poll_inputs()
     bool active = (mask >> i) & 1;
     if (was != active)
       wlog_printf("Input %d -> %s", i + 1, active ? "ACTIVE" : "INACTIVE");
+    // Input 1 = water meter: count one liter per inactive→active transition.
+    if (i == 0 && !was && active)
+      water_pulse_count++;
   }
   input_mask = mask;
 }
@@ -192,6 +214,8 @@ static void server_handle_poll()
   json += millis();
   json += ",\"inputs\":";
   json += input_mask;
+  json += ",\"water_pulses\":";
+  json += water_pulse_count;
   json += ",\"version\":\"";
   json_escape_into(json, util_version_string());
   json += "\",\"lines\":[";
@@ -302,38 +326,65 @@ static void server_handle_config()
 
 /// @brief `GET /history.json` — multi-signal min/avg/max history.
 ///
-/// Returns `{"distance":{"short":...,"long":...}}`. Each ring is
-/// `{"period_sec":N,"buckets":[{"t":..,"min":..,"avg":..,"max":..,"n":..}, ...]}`;
-/// empty slots collapse to `{"t":..,"n":0}`. Persisted to NVS, so the series
-/// survives reboots.
+/// Returns `{"distance":{"short":...,"long":...},"water":{"short":...,"long":...}}`.
+/// Each ring is `{"period_sec":N,"buckets":[{"t":..,"min":..,"avg":..,"max":..,"n":..}, ...]}`;
+/// empty slots collapse to `{"t":..,"n":0}`. Water values are L/min sampled
+/// from the Input 1 pulse counter once per minute. Persisted to NVS, so the
+/// series survives reboots.
 static void server_handle_history()
 {
   String json;
-  json.reserve(12 * 1024);
+  json.reserve(24 * 1024);
   json += "{\"distance\":";
   distance_history.serialize(json);
+  json += ",\"water\":";
+  water_history.serialize(json);
   json += '}';
   server.send(200, "application/json", json);
 }
 
-/// @brief `GET /history/clear?ring=short|long` — erase one history ring,
-///        in RAM and NVS, on user demand.
+/// @brief `GET /history/clear?signal=distance|water&ring=short|long` — erase
+///        one history ring, in RAM and NVS, on user demand.
 /// @note Two-step confirmation is enforced client-side in the UI; this
 ///       endpoint performs the destructive action unconditionally and is
-///       not idempotent. Returns 400 if @c ring is missing or unknown.
+///       not idempotent. `signal` defaults to "distance" for back-compat
+///       with the original UI which only had the tank-distance clear buttons.
+///       Returns 400 if `ring` or `signal` is missing or unknown.
 static void server_handle_history_clear()
 {
+  String signal = server.arg("signal");
+  if (signal.isEmpty())
+    signal = "distance";
   String ring = server.arg("ring");
+
+  History *h = nullptr;
+  const char *signal_label = nullptr;
+  if (signal == "distance")
+  {
+    h = &distance_history;
+    signal_label = "distance";
+  }
+  else if (signal == "water")
+  {
+    h = &water_history;
+    signal_label = "water";
+  }
+  else
+  {
+    server.send(400, "application/json", "{\"error\":\"signal must be distance or water\"}");
+    return;
+  }
+
   if (ring == "short")
   {
-    distance_history.clear_short();
-    wlog_println("History 24h ring cleared (RAM+NVS)");
+    h->clear_short();
+    wlog_printf("History %s 24h ring cleared (RAM+NVS)", signal_label);
     server.send(200, "application/json", "{\"cleared\":\"short\",\"ok\":true}");
   }
   else if (ring == "long")
   {
-    distance_history.clear_long();
-    wlog_println("History 30d ring cleared (RAM+NVS)");
+    h->clear_long();
+    wlog_printf("History %s 30d ring cleared (RAM+NVS)", signal_label);
     server.send(200, "application/json", "{\"cleared\":\"long\",\"ok\":true}");
   }
   else
@@ -369,6 +420,7 @@ void setup()
   wlog_printf("Firmware: %s", util_version_string());
 
   distance_history.begin();
+  water_history.begin();
 
   // xreef/PCF8574 queues pinMode() calls and applies them inside begin();
   // pinMode-before-begin is the library's required order, not the usual Arduino pattern.
@@ -439,6 +491,14 @@ void loop()
     inputs_changed = false;
     poll_inputs();
   }
+  if (now - last_water_sample_ms >= WATER_SAMPLE_MS)
+  {
+    last_water_sample_ms = now;
+    uint32_t delta = water_pulse_count - last_water_pulse_count;
+    last_water_pulse_count = water_pulse_count;
+    // One pulse = one liter; window is 60 s, so delta == L/min as a value.
+    water_history.record(time(nullptr), (float)delta);
+  }
   if (now - last_oled_ms >= OLED_REFRESH_MS)
   {
     last_oled_ms = now;
@@ -448,6 +508,7 @@ void loop()
         relay_mask,
         input_mask,
         now,
+        water_pulse_count,
         ip.c_str(),
     };
     oled_render(snap);

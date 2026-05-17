@@ -29,7 +29,8 @@ struct OledSnapshot
   uint8_t relay_mask; ///< Bit i = valve (i+1) OPEN.
   uint8_t input_mask; ///< Bit i = input  (i+1) ACTIVE.
   unsigned long uptime_ms;
-  const char *ip_str; ///< Borrowed; must outlive the oled_render() call.
+  uint32_t water_pulse_count; ///< Lifetime water meter pulses; 1 pulse = 1 L.
+  const char *ip_str;         ///< Borrowed; must outlive the oled_render() call.
 };
 
 /// @brief Initialize Wire (if not already) and the SSD1306. Safe to call

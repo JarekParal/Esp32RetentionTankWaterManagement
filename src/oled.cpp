@@ -86,30 +86,32 @@ void oled_render(const OledSnapshot &s)
 {
   u8g2.clearBuffer();
 
-  // Row 1: title (small)
+  // Row 1: IP + uptime (small). Replaces the old "Retention Tank" title row;
+  // adding the water meter pushed everything up by one row.
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.setCursor(0, 0);
-  u8g2.print("Retention Tank");
-
-  // Row 2: IP + uptime
   char up[16];
   format_uptime(up, sizeof(up), s.uptime_ms);
-  u8g2.setCursor(0, 11);
+  u8g2.setCursor(0, 0);
   u8g2.print(s.ip_str ? s.ip_str : "(no IP)");
-  // Right-align uptime so the IP can be up to ~14 chars wide before they overlap.
   int up_w = u8g2.getStrWidth(up);
-  u8g2.setCursor(128 - up_w, 11);
+  u8g2.setCursor(128 - up_w, 0);
   u8g2.print(up);
 
-  // Row 3-4: tank (headline). Bigger font.
+  // Row 2-3: tank (headline). Bigger font.
   u8g2.setFont(u8g2_font_7x14B_tf);
   char tank[24];
   snprintf(tank, sizeof(tank), "%.1f cm  %d%%", (double)s.distance_cm, fill_percent(s.distance_cm));
-  u8g2.setCursor(0, 24);
+  u8g2.setCursor(0, 12);
   u8g2.print(tank);
 
-  // Row 5: valve + input masks on one line, small font
+  // Row 4: water meter total since boot (small).
   u8g2.setFont(u8g2_font_6x10_tf);
+  char water[16];
+  snprintf(water, sizeof(water), "Water: %u L", (unsigned)s.water_pulse_count);
+  u8g2.setCursor(0, 30);
+  u8g2.print(water);
+
+  // Row 5: valve + input masks on one line, small font.
   char vmask[16], imask[16];
   format_mask(vmask, sizeof(vmask), s.relay_mask);
   format_mask(imask, sizeof(imask), s.input_mask);
