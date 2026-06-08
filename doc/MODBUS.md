@@ -86,7 +86,7 @@ value = (hi << 16) | lo
 | 0 | Distance cm × 10 (HC-SR04) | `cm = reg / 10.0` | 0..6553.5 cm; `0` = no echo |
 | 1 | Tank fullness % | integer | 0..100 |
 | 2 | Water pulse counter — **high word** | — | 32-bit |
-| 3 | Water pulse counter — **low word** | — | 32-bit; lifetime since boot, **not** persisted |
+| 3 | Water pulse counter — **low word** | — | 32-bit; persisted to NVS and restored at boot |
 | 4 | Water flow rate × 10 (L/min) | `lpm = reg / 10.0` | 0..6553.5 L/min; sampled every 60 s |
 | 5 | Water 24 h total L — **high word** | — | 32-bit; sum over the 144 × 10-min buckets |
 | 6 | Water 24 h total L — **low word** | — | 32-bit |

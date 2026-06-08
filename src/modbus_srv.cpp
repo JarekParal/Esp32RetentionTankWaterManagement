@@ -69,6 +69,7 @@ static int fill_percent(float dist_cm)
 void modbus_init()
 {
   mb.server();
+  modbus_reset_water_flow_baseline();
 
   // ----- Coils 0..7: valve state, read + write -----
   for (int i = 0; i < 8; i++)
@@ -173,6 +174,12 @@ void modbus_init()
               { return (uint16_t)((millis() / 1000UL) & 0xFFFF); });
 
   wlog_println("Modbus TCP listening on :502");
+}
+
+void modbus_reset_water_flow_baseline()
+{
+  last_seen_water_pulses = water_pulse_count;
+  cached_flow_dlpm = 0;
 }
 
 void modbus_poll()

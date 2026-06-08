@@ -104,7 +104,7 @@ Open `http://<device-ip>/`. Sections (foldable, state persists in localStorage):
 | Digital Inputs | 8 status tiles (read-only) |
 | Device Log | Live tail of the firmware's in-memory log buffer (60 lines) |
 
-Header metrics: tank level (% or cm), distance (cm), water total (lifetime since boot), water (24h total), uptime.
+Header metrics: tank level (% or cm), distance (cm), water total (persisted pulse counter), water (24h total), uptime.
 
 **HTTP endpoints** (all `GET`):
 
@@ -114,6 +114,7 @@ Header metrics: tank level (% or cm), distance (cm), water total (lifetime since
 | `/config.json` | UI labels + tank thresholds (embedded blob) |
 | `/poll?since=<seq>` | State snapshot + new log lines |
 | `/history.json` | Distance + water rings (min/avg/max buckets) |
+| `/water/total/set?value=<liters>` | Set the persisted water total counter |
 | `/sw?n=<1..8>&on=<0\|1>` | Set one valve |
 | `/closeall` | Close all valves |
 | `/history/clear?signal=distance\|water&ring=short\|long` | Erase one history ring (RAM + NVS) |

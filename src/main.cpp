@@ -13,7 +13,10 @@
 #include <WebServer.h>
 #include <ArduinoOTA.h>
 #include <PCF8574.h>
+#include <Preferences.h>
 #include <Wire.h>
+
+#include <stdint.h>
 
 #include "log_buffer.h"
 #include "util.h"
@@ -104,18 +107,115 @@ constexpr unsigned long WATER_SAMPLE_MS = 60000;
 
 // ---------------- Digital inputs (PCF8574 @ 0x26, /INT → GPIO12) ----------------
 
-// Water meter on Input 1 — one rising edge = one liter. Counter is lifetime
-// since boot; it is not persisted across reboots (the History rings are,
-// which is where consumption-over-time data actually lives). 32 bits hold
-// ~4 billion liters; the household will run out of plumbing first.
+// Water meter on Input 1 — one rising edge = one liter. Counter is persisted
+// to NVS and restored at boot. 32 bits hold ~4 billion liters; the household
+// will run out of plumbing first.
 uint32_t water_pulse_count = 0;
+static bool water_pulse_count_dirty = false;
+static unsigned long last_water_persist_ms = 0;
+constexpr unsigned long WATER_TOTAL_PERSIST_MS = 5UL * 60UL * 1000UL;
+static constexpr const char *WATER_TOTAL_NVS_NS = "watercnt";
+static constexpr const char *WATER_TOTAL_NVS_KEY = "total";
+
+/// @brief Load the persisted water pulse counter from NVS.
+static void load_water_total()
+{
+  Preferences prefs;
+  if (!prefs.begin(WATER_TOTAL_NVS_NS, /*readOnly=*/true))
+    return;
+  water_pulse_count = prefs.getUInt(WATER_TOTAL_NVS_KEY, 0);
+  prefs.end();
+  last_water_pulse_count = water_pulse_count;
+  wlog_printf("Water total restored: %u L", (unsigned)water_pulse_count);
+}
+
+/// @brief Persist the current water pulse counter to NVS.
+/// @return True when the NVS write succeeds.
+static bool persist_water_total()
+{
+  Preferences prefs;
+  if (!prefs.begin(WATER_TOTAL_NVS_NS, /*readOnly=*/false))
+    return false;
+  size_t written = prefs.putUInt(WATER_TOTAL_NVS_KEY, water_pulse_count);
+  prefs.end();
+  if (written == sizeof(water_pulse_count))
+  {
+    water_pulse_count_dirty = false;
+    last_water_persist_ms = millis();
+    return true;
+  }
+  return false;
+}
+
+/// @brief Flush the water pulse counter to NVS if the write throttle allows it.
+/// @param now Current `millis()` value used for the throttle window.
+static void maybe_persist_water_total(unsigned long now)
+{
+  if (!water_pulse_count_dirty)
+    return;
+  if (last_water_persist_ms != 0 && now - last_water_persist_ms < WATER_TOTAL_PERSIST_MS)
+    return;
+  persist_water_total();
+}
+
+/// @brief Set and immediately persist the water pulse counter.
+/// @param liters New absolute water-meter total in liters.
+/// @return True when the NVS write succeeds.
+static bool set_water_total(uint32_t liters)
+{
+  uint32_t previous_water_pulse_count = water_pulse_count;
+  uint32_t previous_last_water_pulse_count = last_water_pulse_count;
+  bool previous_dirty = water_pulse_count_dirty;
+
+  water_pulse_count = liters;
+  last_water_pulse_count = liters;
+  water_pulse_count_dirty = true;
+  bool ok = persist_water_total();
+  if (!ok)
+  {
+    water_pulse_count = previous_water_pulse_count;
+    last_water_pulse_count = previous_last_water_pulse_count;
+    water_pulse_count_dirty = previous_dirty;
+    return false;
+  }
+
+  modbus_reset_water_flow_baseline();
+  wlog_printf("Water total set: %u L", (unsigned)water_pulse_count);
+  return ok;
+}
+
+/// @brief Parse an unsigned 32-bit decimal String.
+/// @param s Input text; must contain only decimal digits.
+/// @param out Parsed value on success.
+/// @return True when the full input is a valid uint32_t.
+static bool parse_u32_arg(const String &s, uint32_t &out)
+{
+  if (s.isEmpty())
+    return false;
+  uint64_t v = 0;
+  for (size_t i = 0; i < s.length(); i++)
+  {
+    char c = s.charAt(i);
+    if (c < '0' || c > '9')
+      return false;
+    v = v * 10u + (uint32_t)(c - '0');
+    if (v > UINT32_MAX)
+      return false;
+  }
+  out = (uint32_t)v;
+  return true;
+}
 
 /// @brief Read all 8 PCF8574 digital inputs, update input_mask, log transitions.
+/// @param count_water_edges When true, count Input 1 inactive-to-active edges
+///                          as water-meter pulses. Pass false for the initial
+///                          boot snapshot so an already-active input is not
+///                          counted as a new liter.
 /// @note Single Wire.requestFrom() gives an atomic snapshot and bypasses the
 ///       library's 10 ms latency cache, which silently returns LOW for all pins
 ///       when called again within the latency window (byteBuffered=0 + no I2C read
 ///       = all fall through to the default LOW value for pullDown-mode pins).
-static void poll_inputs()
+static void poll_inputs(bool count_water_edges = true)
 {
   Wire.requestFrom((uint8_t)0x26, (uint8_t)1);
   if (!Wire.available())
@@ -129,8 +229,11 @@ static void poll_inputs()
     if (was != active)
       wlog_printf("Input %d -> %s", i + 1, active ? "ACTIVE" : "INACTIVE");
     // Input 1 = water meter: count one liter per inactive→active transition.
-    if (i == 0 && !was && active)
+    if (count_water_edges && i == 0 && !was && active)
+    {
       water_pulse_count++;
+      water_pulse_count_dirty = true;
+    }
   }
   input_mask = mask;
 }
@@ -233,6 +336,34 @@ static void server_handle_poll()
     json += '"';
   }
   json += "]}";
+  server.send(200, "application/json", json);
+}
+
+/// @brief `GET /water/total/set?value=<liters>` — set the persisted water total.
+///
+/// The value is an absolute uint32 liter count. The endpoint intentionally has
+/// no authentication; it updates RAM, writes NVS immediately, resets flow-rate
+/// baselines, logs the change, and returns `{"water_pulses":..,"ok":true}`.
+static void server_handle_water_total_set()
+{
+  uint32_t liters = 0;
+  if (!parse_u32_arg(server.arg("value"), liters))
+  {
+    server.send(400, "application/json", "{\"error\":\"value must be 0..4294967295\"}");
+    return;
+  }
+
+  if (!set_water_total(liters))
+  {
+    server.send(500, "application/json", "{\"error\":\"NVS write failed\"}");
+    return;
+  }
+
+  String json;
+  json.reserve(48);
+  json += "{\"water_pulses\":";
+  json += water_pulse_count;
+  json += ",\"ok\":true}";
   server.send(200, "application/json", json);
 }
 
@@ -424,6 +555,7 @@ void setup()
 
   distance_history.begin();
   water_history.begin();
+  load_water_total();
 
   // xreef/PCF8574 queues pinMode() calls and applies them inside begin();
   // pinMode-before-begin is the library's required order, not the usual Arduino pattern.
@@ -437,7 +569,7 @@ void setup()
   for (int i = 0; i < 8; i++)
     pcf8574_in.pinMode(i, INPUT);
   pcf8574_in.begin();
-  poll_inputs(); // capture initial state; also deasserts any pending /INT before we attach
+  poll_inputs(false); // capture initial state; also deasserts any pending /INT before we attach
   pinMode(INPUT_INT_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(INPUT_INT_PIN), isr_pcf_input, FALLING);
 
@@ -450,6 +582,7 @@ void setup()
   server.on("/config.json", server_handle_config);
   server.on("/history.json", server_handle_history);
   server.on("/history/clear", server_handle_history_clear);
+  server.on("/water/total/set", server_handle_water_total_set);
   server.on("/sw", server_handle_sw);
   server.on("/closeall", server_handle_closeall);
   server.on("/poll", server_handle_poll);
@@ -460,7 +593,9 @@ void setup()
   ArduinoOTA.setHostname("retention-tank");
   // ArduinoOTA.setPassword("change-me"); // uncomment and set in upload_flags --auth=
   ArduinoOTA.onStart([]()
-                     { wlog_println("OTA: start"); });
+                     {
+                       persist_water_total();
+                       wlog_println("OTA: start"); });
   ArduinoOTA.onEnd([]()
                    { wlog_println("OTA: end"); });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
@@ -497,6 +632,7 @@ void loop()
     inputs_changed = false;
     poll_inputs();
   }
+  maybe_persist_water_total(now);
   if (now - last_water_sample_ms >= WATER_SAMPLE_MS)
   {
     last_water_sample_ms = now;
