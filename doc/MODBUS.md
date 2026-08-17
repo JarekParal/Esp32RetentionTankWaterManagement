@@ -20,15 +20,15 @@ reference — for the rest of the project see the [README](../README.md).
 
 | Function code(s) | Region | Range used |
 | --- | --- | --- |
-| FC1 / FC5 / FC15 (Read / Write / Write multiple coils) | Coils | `0..19` |
+| FC1 / FC5 / FC15 (Read / Write / Write multiple coils) | Coils | `0..21` |
 | FC2 (Read discrete inputs) | Discrete inputs | `0..7` |
-| FC4 (Read input registers) | Input registers | `0..11` |
-| FC3 / FC6 / FC16 (Read / Write / Write multiple holding regs) | Holding registers | *unused* — no writable scalar config today |
+| FC4 (Read input registers) | Input registers | `0..8`, `10..11` |
+| FC3 / FC6 / FC16 (Read / Write / Write multiple holding regs) | Holding registers | `0..7` |
 
 Reading addresses outside these ranges returns an illegal-data-address
 exception (Modbus error code `2`).
 
-## Coils — `0..19`
+## Coils — `0..21`
 
 Booleans, read/write. Valve coils mirror live state; trigger coils
 self-clear to `0` after the action runs.
@@ -48,6 +48,8 @@ self-clear to `0` after the action runs.
 | 17 | W (write-1 trigger) | **Clear water 30 d history** (RAM + NVS) |
 | 18 | W (write-1 trigger) | **Clear distance 24 h history** (RAM + NVS) |
 | 19 | W (write-1 trigger) | **Clear distance 30 d history** (RAM + NVS) |
+| 20 | W (write-1 trigger) | **Clear current 24 h history** (RAM + NVS) |
+| 21 | W (write-1 trigger) | **Clear current 30 d history** (RAM + NVS) |
 
 Writing `0` to a trigger coil is a no-op (no action runs, value stays `0`).
 The clear actions also log a `Modbus: cleared <signal> <window>` line so the
@@ -90,17 +92,29 @@ value = (hi << 16) | lo
 | 4 | Water flow rate × 10 (L/min) | `lpm = reg / 10.0` | 0..6553.5 L/min; sampled every 60 s |
 | 5 | Water 24 h total L — **high word** | — | 32-bit; sum over the 144 × 10-min buckets |
 | 6 | Water 24 h total L — **low word** | — | 32-bit |
+| 7 | RMS electrical current | `A = reg / 1000.0` | 0..65.535 A; sampled every 10 s |
+| 8 | Estimated active power | `W = reg` | 0..65535 W; assumes 230 V and PF 0.85 |
 | 10 | Uptime seconds — **high word** | — | 32-bit, wraps after ~136 years |
 | 11 | Uptime seconds — **low word** | — | 32-bit |
 
-Addresses `7..9` and `12+` are reserved and currently return illegal-data-address.
+Addresses `9` and `12+` are reserved and currently return illegal-data-address.
 
-## Holding registers
+## Holding registers — `0..7`
 
-**None.** No writable scalar configuration exposed today. Tank fullness
-thresholds, valve labels, etc. live in `web/config.json` and are baked
-into the firmware at build time. If you need a writable scalar in the
-future, holding registers starting at `0` are the natural place.
+Each solenoid has one dedicated read/write holding register. Write `0` to
+close it or any non-zero value to open it; reads are normalized to `0` or `1`.
+The valve coils at the same addresses remain available for backward compatibility.
+
+| Addr | Meaning |
+| ---: | --- |
+| 0 | Valve 1 open (`1`) / closed (`0`) |
+| 1 | Valve 2 |
+| 2 | Valve 3 |
+| 3 | Valve 4 |
+| 4 | Valve 5 |
+| 5 | Valve 6 |
+| 6 | Valve 7 |
+| 7 | Valve 8 |
 
 ## Example sessions
 
@@ -116,8 +130,8 @@ mbpoll -m tcp -a 1 -t 3 -r 1 -c 2 192.168.1.200
 # [1]: 452       <- 45.2 cm
 # [2]: 68        <- 68 %
 
-# Open valve 3.
-mbpoll -m tcp -a 1 -t 0 -r 3 192.168.1.200 1
+# Open valve 3 through its dedicated holding register.
+mbpoll -m tcp -a 1 -t 4 -r 3 192.168.1.200 1
 
 # Close all 8 valves at once via the trigger coil.
 mbpoll -m tcp -a 1 -t 0 -r 9 192.168.1.200 1
@@ -141,10 +155,12 @@ fullness_pct  = r.registers[1]
 water_pulses  = (r.registers[2] << 16) | r.registers[3]
 flow_lpm      = r.registers[4] / 10.0
 water_24h_l   = (r.registers[5] << 16) | r.registers[6]
+current_a     = r.registers[7] / 1000.0
+power_w       = r.registers[8]
 uptime_s      = (r.registers[10] << 16) | r.registers[11]
 
-# Open valve 1.
-client.write_coil(address=0, value=True, slave=1)
+# Open valve 1 through its dedicated holding register.
+client.write_register(address=0, value=1, slave=1)
 
 # Wipe yesterday's water history.
 client.write_coil(address=16, value=True, slave=1)
@@ -186,12 +202,23 @@ modbus:
         data_type: uint32
         swap: false
         precision: 0
+      - name: RMS current
+        unit_of_measurement: A
+        input_type: input
+        address: 7
+        scale: 0.001
+        precision: 3
+      - name: Estimated active power
+        unit_of_measurement: W
+        input_type: input
+        address: 8
+        precision: 0
 
     switches:
       - name: Valve 1
         address: 0
-        write_type: coil
-        verify: { input_type: coil, address: 0 }
+        write_type: holding
+        verify: { input_type: holding, address: 0 }
       # ...valves 2..8 analogously
 ```
 
@@ -200,11 +227,14 @@ modbus:
 | Register | Updated every | Notes |
 | --- | --- | --- |
 | Coils 0..7 (valves) | Real-time | Reflects the running `relay_mask` directly |
+| Hregs 0..7 (valves) | Real-time | Dedicated read/write register for each solenoid |
 | Discrete 0..7 (inputs) | Within ~1 ms of an edge | PCF8574 `/INT` → GPIO12 ISR |
 | Ireg 0..1 (distance, fullness) | 10 s | HC-SR04 sample period |
 | Ireg 2..3 (water pulses) | Real-time | Counted in `poll_inputs()` on every input change |
 | Ireg 4 (flow rate) | 60 s | Independent 1-min sampler in `modbus_srv.cpp` |
 | Ireg 5..6 (water 24 h) | Per Modbus read | Computed on-demand from the short-ring buckets |
+| Ireg 7 (RMS current) | 10 s | 250 ms differential sampling window on ADS1115 AIN0–AIN1 |
+| Ireg 8 (estimated power) | 10 s | `230 V × RMS current × 0.85 power factor` |
 | Ireg 10..11 (uptime) | Per Modbus read | `millis() / 1000` |
 
 The History rings themselves roll over on `period_sec` boundaries:
@@ -218,7 +248,7 @@ independent flow-rate input register remains a 60-second L/min sample.
 - The Modbus server runs in the main Arduino loop, single-threaded with
   the HTTP server and OTA handler. `mb.task()` is non-blocking; expected
   worst-case latency under load is a handful of milliseconds.
-- Trigger coils (`8`, `16..19`) self-clear by returning `0` from their
+- Trigger coils (`8`, `16..21`) self-clear by returning `0` from their
   `onSetCoil` callback. Reads of these addresses always return `0`.
 - Source: [src/modbus_srv.cpp](../src/modbus_srv.cpp), wired into
   `setup()` / `loop()` in [src/main.cpp](../src/main.cpp).

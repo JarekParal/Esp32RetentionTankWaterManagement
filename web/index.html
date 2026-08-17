@@ -485,6 +485,14 @@
         <strong id="water-24h">&mdash;</strong>
       </div>
       <div class="metric">
+        <label>Current</label>
+        <strong id="current">&mdash;</strong>
+      </div>
+      <div class="metric">
+        <label>Est. power</label>
+        <strong id="power">&mdash;</strong>
+      </div>
+      <div class="metric">
         <label>Uptime</label>
         <strong id="uptime">&mdash;</strong>
       </div>
@@ -544,6 +552,34 @@
             </span>
           </div>
           <svg id="water-chart-30d" class="chart" viewBox="0 0 320 110"></svg>
+        </div>
+      </div>
+    </section>
+
+    <section class="history" data-section="current">
+      <h2>Electrical Load <small id="electrical-assumptions"></small></h2>
+      <div class="history-grid">
+        <div class="chart-panel">
+          <div class="chart-title">
+            <span id="current-window-24h">Last 24 hours</span>
+            <span class="range" id="current-range-24h">&mdash;</span>
+            <span class="chart-actions">
+              <button class="fullscreen-chart" type="button" aria-label="Show Last 24 hours current graph full screen">Full screen</button>
+              <button id="clearCurrentShort" class="danger" type="button">Clear 24h</button>
+            </span>
+          </div>
+          <svg id="current-chart-24h" class="chart" viewBox="0 0 320 110"></svg>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-title">
+            <span id="current-window-30d">Last 30 days</span>
+            <span class="range" id="current-range-30d">&mdash;</span>
+            <span class="chart-actions">
+              <button class="fullscreen-chart" type="button" aria-label="Show Last 30 days current graph full screen">Full screen</button>
+              <button id="clearCurrentLong" class="danger" type="button">Clear 30d</button>
+            </span>
+          </div>
+          <svg id="current-chart-30d" class="chart" viewBox="0 0 320 110"></svg>
         </div>
       </div>
     </section>
@@ -630,6 +666,15 @@
       const $waterRange30d = document.getElementById('water-range-30d');
       const $waterWindow24h = document.getElementById('water-window-24h');
       const $waterWindow30d = document.getElementById('water-window-30d');
+      const $current = document.getElementById('current');
+      const $power = document.getElementById('power');
+      const $electricalAssumptions = document.getElementById('electrical-assumptions');
+      const $currentChart24h = document.getElementById('current-chart-24h');
+      const $currentChart30d = document.getElementById('current-chart-30d');
+      const $currentRange24h = document.getElementById('current-range-24h');
+      const $currentRange30d = document.getElementById('current-range-30d');
+      const $currentWindow24h = document.getElementById('current-window-24h');
+      const $currentWindow30d = document.getElementById('current-window-30d');
       const $waterTotalDialog = document.getElementById('waterTotalDialog');
       const $waterTotalForm = document.getElementById('waterTotalForm');
       const $waterTotalInput = document.getElementById('waterTotalInput');
@@ -816,6 +861,12 @@
           if (typeof json.water_pulses === 'number') {
             $waterTotal.textContent = `${json.water_pulses} L`;
           }
+          if (typeof json.current_a === 'number') {
+            $current.textContent = `${json.current_a.toFixed(2)} A`;
+          }
+          if (typeof json.power_w === 'number') {
+            $power.textContent = `${json.power_w.toFixed(0)} W`;
+          }
           if ($waterTotalDialog.open) $waterTotalDialog.close();
           poll();
         } catch (e) {
@@ -953,6 +1004,12 @@
           if (f.b.hi > yMax) yMax = f.b.hi;
         }
         $range.textContent = `${yMin.toFixed(1)} – ${yMax.toFixed(1)} ${unit}`;
+        if (opts.secondaryFromPrimary) {
+          const secondaryMin = opts.secondaryFromPrimary(yMin);
+          const secondaryMax = opts.secondaryFromPrimary(yMax);
+          const secondaryDecimals = opts.secondaryDecimals ?? 0;
+          $range.textContent += ` · ${secondaryMin.toFixed(secondaryDecimals)} – ${secondaryMax.toFixed(secondaryDecimals)} ${opts.secondaryUnit || ''}`;
+        }
         const yPad = Math.max((yMax - yMin) * 0.08, 0.2);
         yMin -= yPad; yMax += yPad;
         const yScale = yMax - yMin || 1;
@@ -1008,7 +1065,7 @@
               x: (plotX0 + plotW + 2).toFixed(2), y: y.toFixed(2),
               'text-anchor': 'start', 'dominant-baseline': 'middle',
             });
-            t.textContent = sv.toFixed(0);
+            t.textContent = sv.toFixed(opts.secondaryDecimals ?? 0);
             yAxisR.appendChild(t);
           }
           const secLabel = svgEl('text', {
@@ -1157,7 +1214,7 @@
           const lineRng = `${f.b.lo.toFixed(1)} – ${f.b.hi.toFixed(1)} ${unit}`;
           const lineN   = `n = ${f.b.n}`;
           const lineSec = useSecondary
-            ? `${opts.secondaryFromPrimary(f.b.avg).toFixed(0)} ${opts.secondaryUnit || ''}`.trim()
+            ? `${opts.secondaryFromPrimary(f.b.avg).toFixed(opts.secondaryDecimals ?? 0)} ${opts.secondaryUnit || ''}`.trim()
             : null;
 
           const lines = [timeLabel, lineAvg];
@@ -1262,6 +1319,7 @@
           const res = await fetch('/history.json');
           if (!res.ok) return;
           const data = await res.json();
+          const electrical = data?.electrical;
           const dist = data?.distance;
           if (dist) {
             const transform = tankCal ? distanceToFullness : v => v;
@@ -1295,6 +1353,20 @@
               }
               $water24h.textContent = `${Math.round(total)} L`;
             }
+          }
+          const current = data?.current;
+          if (current && Number.isFinite(electrical?.line_voltage_v)
+                      && Number.isFinite(electrical?.power_factor)) {
+            const lineVoltage = electrical.line_voltage_v;
+            const powerFactor = electrical.power_factor;
+            $electricalAssumptions.textContent = `(${lineVoltage.toFixed(0)} V, PF ${powerFactor.toFixed(2)})`;
+            const powerOpts = {
+              secondaryFromPrimary: amperes => amperes * lineVoltage * powerFactor,
+              secondaryUnit: 'W',
+              secondaryDecimals: 0,
+            };
+            renderChart($currentChart24h, $currentRange24h, $currentWindow24h, current.short, v => v, 'A', powerOpts);
+            renderChart($currentChart30d, $currentRange30d, $currentWindow30d, current.long, v => v, 'A', powerOpts);
           }
         } catch (_e) { /* keep last render */ }
       }
@@ -1346,6 +1418,10 @@
         'click', () => clearHistoryRing('water', 'short', 'water consumption', 'last 24 hours'));
       document.getElementById('clearWaterLong').addEventListener(
         'click', () => clearHistoryRing('water', 'long',  'water consumption', 'last 30 days'));
+      document.getElementById('clearCurrentShort').addEventListener(
+        'click', () => clearHistoryRing('current', 'short', 'electrical current', 'last 24 hours'));
+      document.getElementById('clearCurrentLong').addEventListener(
+        'click', () => clearHistoryRing('current', 'long', 'electrical current', 'last 30 days'));
 
       // Foldable sections. Click the title row to collapse/expand; state
       // persists in localStorage so a reload restores what the user had open.

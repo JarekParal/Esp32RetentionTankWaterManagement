@@ -21,6 +21,7 @@
 #include "log_buffer.h"
 #include "util.h"
 #include "history.h"
+#include "current_sensor.h"
 #include "oled.h"
 #include "modbus_srv.h"
 
@@ -81,6 +82,14 @@ float cached_distance_cm = 0.0f;
 static unsigned long last_distance_ms = 0;
 constexpr unsigned long DISTANCE_REFRESH_MS = 10000;
 
+// ---------------- Electrical current (ADS1115 AIN0-AIN1) ----------------
+constexpr uint8_t CURRENT_ADC_ADDRESS = 0x48;
+constexpr float CURRENT_PROBE_AMPS_PER_VOLT = 10.0f;
+constexpr float CURRENT_LINE_VOLTAGE_V = 230.0f;
+constexpr float CURRENT_ASSUMED_POWER_FACTOR = 0.85f;
+float cached_current_a = 0.0f;
+float cached_power_w = 0.0f;
+
 // ---------------- OLED refresh ----------------
 static unsigned long last_oled_ms = 0;
 constexpr unsigned long OLED_REFRESH_MS = 200;
@@ -89,6 +98,11 @@ constexpr unsigned long OLED_REFRESH_MS = 200;
 // 1-day × 30 long ring = 30 d, one NVS write per daily rollover (~1/day).
 History distance_history(
     "dist",
+    History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
+    History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
+
+History current_history(
+    "current",
     History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
     History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
 
@@ -293,7 +307,8 @@ static void json_escape_into(String &out, const char *s)
 
 /// @brief `GET /poll?since=<seq>` — state snapshot plus new log lines.
 ///
-/// Returns a JSON object with the latest seq, relay mask, distance, uptime,
+/// Returns a JSON object with the latest seq, relay mask, distance, RMS current,
+/// estimated active power, uptime,
 /// and any log lines with seq in `[since, current_seq)`. Seq numbers are
 /// monotonic; if @c since is older than the ring buffer still retains it is
 /// clamped forward to wlog_oldest_seq(), and the gap of overwritten lines
@@ -317,6 +332,10 @@ static void server_handle_poll()
   json += relay_mask;
   json += ",\"distance_cm\":";
   json += String(cached_distance_cm, 1);
+  json += ",\"current_a\":";
+  json += String(cached_current_a, 3);
+  json += ",\"power_w\":";
+  json += String(cached_power_w, 1);
   json += ",\"uptime_ms\":";
   json += millis();
   json += ",\"inputs\":";
@@ -461,7 +480,8 @@ static void server_handle_config()
 
 /// @brief `GET /history.json` — multi-signal min/avg/max history.
 ///
-/// Returns `{"distance":{"short":...,"long":...},"water":{"short":...,"long":...}}`.
+/// Returns the electrical estimation assumptions plus distance,
+/// water-consumption, and electrical-current history rings.
 /// Each ring is `{"period_sec":N,"buckets":[{"t":..,"min":..,"avg":..,"max":..,"n":..}, ...]}`;
 /// empty slots collapse to `{"t":..,"n":0}`. Water buckets include `sum`,
 /// the exact liters consumed during each 10-minute or daily interval. History
@@ -469,16 +489,22 @@ static void server_handle_config()
 static void server_handle_history()
 {
   String json;
-  json.reserve(24 * 1024);
-  json += "{\"distance\":";
+  json.reserve(40 * 1024);
+  json += "{\"electrical\":{\"line_voltage_v\":";
+  json += String(CURRENT_LINE_VOLTAGE_V, 1);
+  json += ",\"power_factor\":";
+  json += String(CURRENT_ASSUMED_POWER_FACTOR, 2);
+  json += "},\"distance\":";
   distance_history.serialize(json);
   json += ",\"water\":";
   water_history.serialize(json, /*include_sum=*/true);
+  json += ",\"current\":";
+  current_history.serialize(json);
   json += '}';
   server.send(200, "application/json", json);
 }
 
-/// @brief `GET /history/clear?signal=distance|water&ring=short|long` — erase
+/// @brief `GET /history/clear?signal=distance|water|current&ring=short|long` — erase
 ///        one history ring, in RAM and NVS, on user demand.
 /// @note Two-step confirmation is enforced client-side in the UI; this
 ///       endpoint performs the destructive action unconditionally and is
@@ -504,9 +530,14 @@ static void server_handle_history_clear()
     h = &water_history;
     signal_label = "water";
   }
+  else if (signal == "current")
+  {
+    h = &current_history;
+    signal_label = "current";
+  }
   else
   {
-    server.send(400, "application/json", "{\"error\":\"signal must be distance or water\"}");
+    server.send(400, "application/json", "{\"error\":\"signal must be distance, water, or current\"}");
     return;
   }
 
@@ -556,6 +587,7 @@ void setup()
 
   distance_history.begin();
   water_history.begin();
+  current_history.begin();
   load_water_total();
 
   // xreef/PCF8574 queues pinMode() calls and applies them inside begin();
@@ -573,6 +605,11 @@ void setup()
   poll_inputs(false); // capture initial state; also deasserts any pending /INT before we attach
   pinMode(INPUT_INT_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(INPUT_INT_PIN), isr_pcf_input, FALLING);
+
+  if (current_sensor_begin(CURRENT_ADC_ADDRESS, CURRENT_PROBE_AMPS_PER_VOLT))
+    wlog_println("ADS1115 current sensor ready");
+  else
+    wlog_println("ADS1115 current sensor not found");
 
   // OLED at 0x3C — shares the Wire bus already initialized by the PCF8574s.
   oled_init();
@@ -632,6 +669,14 @@ void loop()
   {
     inputs_changed = false;
     poll_inputs();
+  }
+  float current_a = 0.0f;
+  if (current_sensor_poll(now, current_a))
+  {
+    cached_current_a = current_a;
+    cached_power_w = CURRENT_LINE_VOLTAGE_V * cached_current_a * CURRENT_ASSUMED_POWER_FACTOR;
+    wlog_printf("Electrical: %.3f A RMS, %.1f W estimated", cached_current_a, cached_power_w);
+    current_history.record(time(nullptr), cached_current_a);
   }
   maybe_persist_water_total(now);
   time_t now_epoch = time(nullptr);

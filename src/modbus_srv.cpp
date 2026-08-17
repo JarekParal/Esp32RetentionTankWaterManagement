@@ -11,9 +11,12 @@
 extern uint8_t relay_mask;
 extern uint8_t input_mask;
 extern float cached_distance_cm;
+extern float cached_current_a;
+extern float cached_power_w;
 extern uint32_t water_pulse_count;
 extern History distance_history;
 extern History water_history;
+extern History current_history;
 void set_valve(int n, bool open);
 
 // Tank fill thresholds mirror oled.cpp / web/config.json. Kept duplicated by
@@ -30,8 +33,12 @@ constexpr uint16_t COIL_CLEAR_WATER_SHORT = 16;
 constexpr uint16_t COIL_CLEAR_WATER_LONG = 17;
 constexpr uint16_t COIL_CLEAR_DIST_SHORT = 18;
 constexpr uint16_t COIL_CLEAR_DIST_LONG = 19;
+constexpr uint16_t COIL_CLEAR_CURRENT_SHORT = 20;
+constexpr uint16_t COIL_CLEAR_CURRENT_LONG = 21;
 
 constexpr uint16_t IST_INPUT_BASE = 0; // 0..7 = input 1..8
+
+constexpr uint16_t HREG_VALVE_BASE = 0; // 0..7 = valve 1..8, 0 closed / 1 open
 
 constexpr uint16_t IREG_DISTANCE_DM = 0;     // distance_cm × 10
 constexpr uint16_t IREG_FULLNESS_PCT = 1;    // 0..100
@@ -40,6 +47,8 @@ constexpr uint16_t IREG_WATER_PULSES_LO = 3;
 constexpr uint16_t IREG_WATER_FLOW_DLPM = 4; // last-minute pulses × 10 (L/min × 10)
 constexpr uint16_t IREG_WATER_24H_HI = 5;    // 32-bit liters in last 24 h
 constexpr uint16_t IREG_WATER_24H_LO = 6;
+constexpr uint16_t IREG_CURRENT_MA = 7;   // RMS current in milliamperes
+constexpr uint16_t IREG_POWER_W = 8;      // estimated active power in watts
 constexpr uint16_t IREG_UPTIME_S_HI = 10; // 32-bit seconds since boot
 constexpr uint16_t IREG_UPTIME_S_LO = 11;
 } // namespace mb_addr
@@ -84,6 +93,19 @@ void modbus_init()
       return val ? 1 : 0; });
   }
 
+  // ----- Holding registers 0..7: one read/write register per valve -----
+  for (int i = 0; i < 8; i++)
+  {
+    const uint16_t addr = mb_addr::HREG_VALVE_BASE + i;
+    mb.addHreg(addr);
+    mb.onGetHreg(addr, [i](TRegister *, uint16_t) -> uint16_t
+                 { return (relay_mask & (1u << i)) ? 1 : 0; });
+    mb.onSetHreg(addr, [i](TRegister *, uint16_t val) -> uint16_t
+                 {
+      set_valve(i + 1, val != 0);
+      return val ? 1 : 0; });
+  }
+
   // ----- Coil 8: close-all trigger (write-1, self-clears) -----
   mb.addCoil(mb_addr::COIL_CLOSE_ALL);
   mb.onSetCoil(mb_addr::COIL_CLOSE_ALL, [](TRegister *, uint16_t val) -> uint16_t
@@ -95,7 +117,7 @@ void modbus_init()
     }
     return 0; });
 
-  // ----- Coils 16..19: history-clear triggers -----
+  // ----- Coils 16..21: history-clear triggers -----
   struct ClearWiring
   {
     uint16_t addr;
@@ -111,6 +133,10 @@ void modbus_init()
        { distance_history.clear_short(); }},
       {mb_addr::COIL_CLEAR_DIST_LONG, "distance 30d", []()
        { distance_history.clear_long(); }},
+      {mb_addr::COIL_CLEAR_CURRENT_SHORT, "current 24h", []()
+       { current_history.clear_short(); }},
+      {mb_addr::COIL_CLEAR_CURRENT_LONG, "current 30d", []()
+       { current_history.clear_long(); }},
   };
   for (const auto &w : clears)
   {
@@ -168,6 +194,18 @@ void modbus_init()
               {
     uint32_t l = (uint32_t)lroundf(water_history.short_window_sum());
     return (uint16_t)(l & 0xFFFF); });
+  add_ireg_ro(mb_addr::IREG_CURRENT_MA, []() -> uint16_t
+              {
+    if (!isfinite(cached_current_a) || cached_current_a < 0.0f) return 0;
+    long milliamps = lroundf(cached_current_a * 1000.0f);
+    if (milliamps > 65535) milliamps = 65535;
+    return (uint16_t)milliamps; });
+  add_ireg_ro(mb_addr::IREG_POWER_W, []() -> uint16_t
+              {
+    if (!isfinite(cached_power_w) || cached_power_w < 0.0f) return 0;
+    long watts = lroundf(cached_power_w);
+    if (watts > 65535) watts = 65535;
+    return (uint16_t)watts; });
   add_ireg_ro(mb_addr::IREG_UPTIME_S_HI, []() -> uint16_t
               { return (uint16_t)((millis() / 1000UL) >> 16); });
   add_ireg_ro(mb_addr::IREG_UPTIME_S_LO, []() -> uint16_t

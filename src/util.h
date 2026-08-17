@@ -8,7 +8,7 @@
 /// Manually bumped on each release. Combined with the git hash and build
 /// time (both injected via scripts/inject_build_info.py) to form the full
 /// version string returned by util_version_string().
-constexpr const char *FIRMWARE_VERSION = "0.1.0";
+constexpr const char *FIRMWARE_VERSION = "0.2.0";
 
 /// @brief Configure SNTP and the local timezone.
 ///

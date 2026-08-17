@@ -3,7 +3,7 @@
 ESP32 firmware for a residential water-retention tank controller running on the
 **Hankerila HKL-EA8** board. Drives 8 solenoid valves, reads an HC-SR04
 ultrasonic tank-level sensor, monitors 8 digital inputs (one of them a 1 L/pulse
-water meter), shows live state on a small OLED, and exposes everything over
+water meter), measures RMS electrical current, shows live state on an OLED, and exposes everything over
 **HTTP** (browser UI) and **Modbus TCP/502** (PLC / HA / SCADA).
 
 Wired Ethernet only — no Wi-Fi.
@@ -32,6 +32,7 @@ Wired Ethernet only — no Wi-Fi.
 - **Inputs**: 8 inputs on a second PCF8574 at `0x26`, INT line wired to GPIO12 so polling is interrupt-driven, not timer-based.
 - **Tank level**: HC-SR04 ultrasonic, sampled every 10 s; persisted as a 24 h × 10 min and 30 d × 1 day min/avg/max history.
 - **Water meter**: Input 1 doubles as a 1 L/pulse counter. Each pulse is recorded into 10-minute and daily history buckets, whose sums are the actual consumption for those intervals.
+- **Electrical load**: ADS1115 differential input AIN0–AIN1 measures a 10 A/V current probe every 10 s and records 10-minute and daily RMS-current history. Estimated active power uses 230 V and an assumed 0.85 power factor.
 - **OLED**: 0.96" SSD1306 over the same I²C bus (`0x3C`) shows IP, uptime, tank cm + fill %, water L, valve+input mask, last log line.
 
 ---
@@ -52,6 +53,7 @@ Wired Ethernet only — no Wi-Fi.
 | `0x24` | PCF8574 | 8 relay outputs (active-low) |
 | `0x26` | PCF8574 | 8 digital inputs (active-low, /INT → GPIO12) |
 | `0x3C` | SSD1306 | 0.96" 128×64 OLED display |
+| `0x48` | ADS1115 | Current probe on differential AIN0–AIN1 (10 A/V) |
 
 **Other pins**:
 
@@ -100,11 +102,12 @@ Open `http://<device-ip>/`. Sections (foldable, state persists in localStorage):
 | --- | --- |
 | Tank Distance | 24 h (10-min buckets) and 30 d (daily) min/avg/max charts; "Clear 24h" / "Clear 30d" buttons with two-step confirm |
 | Water Consumption | Actual liters per interval: 10-minute totals across the last 24 hours and daily totals across the last 30 days |
+| Electrical Load | RMS amperes and estimated watts: 10-minute min/avg/max across 24 hours and daily min/avg/max across 30 days |
 | Solenoid Valves | 8 toggle tiles + "Close all" |
 | Digital Inputs | 8 status tiles (read-only) |
 | Device Log | Live tail of the firmware's in-memory log buffer (60 lines) |
 
-Header metrics: tank level (% or cm), distance (cm), water total (persisted pulse counter), water (24h total), uptime.
+Header metrics: tank level (% or cm), distance (cm), water total (persisted pulse counter), water (24h total), RMS current, estimated power, uptime.
 
 **HTTP endpoints** (all `GET`):
 
@@ -113,11 +116,11 @@ Header metrics: tank level (% or cm), distance (cm), water total (persisted puls
 | `/` | UI HTML (embedded blob) |
 | `/config.json` | UI labels + tank thresholds (embedded blob) |
 | `/poll?since=<seq>` | State snapshot + new log lines |
-| `/history.json` | Distance + water rings (min/avg/max buckets) |
+| `/history.json` | Distance, water, and electrical-current history rings |
 | `/water/total/set?value=<liters>` | Set the persisted water total counter |
 | `/sw?n=<1..8>&on=<0\|1>` | Set one valve |
 | `/closeall` | Close all valves |
-| `/history/clear?signal=distance\|water&ring=short\|long` | Erase one history ring (RAM + NVS) |
+| `/history/clear?signal=distance\|water\|current&ring=short\|long` | Erase one history ring (RAM + NVS) |
 | `/SW?LED=on1\|off1\|...` | Legacy back-compat |
 
 ---
@@ -132,14 +135,14 @@ Quick read with [`mbpoll`](https://github.com/epsilonrt/mbpoll):
 # Tank distance × 10 (so 452 = 45.2 cm) and fullness %
 mbpoll -m tcp -a 1 -t 3 -r 1 -c 2 <device-ip>
 
-# Open valve 1
-mbpoll -m tcp -a 1 -t 0 -r 1 <device-ip> 1
+# Open valve 1 through its dedicated holding register
+mbpoll -m tcp -a 1 -t 4 -r 1 <device-ip> 1
 
 # Close all
 mbpoll -m tcp -a 1 -t 0 -r 9 <device-ip> 1
 ```
 
-`-t 0` = coils, `-t 1` = discrete inputs, `-t 3` = input registers. `mbpoll` uses 1-based addresses; the table in MODBUS.md is in 0-based form so `-r 1` here is address `0`.
+`-t 0` = coils, `-t 1` = discrete inputs, `-t 3` = input registers, `-t 4` = holding registers. `mbpoll` uses 1-based addresses; the table in MODBUS.md is in 0-based form so `-r 1` here is address `0`.
 
 ---
 
