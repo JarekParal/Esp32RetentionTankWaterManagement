@@ -92,18 +92,18 @@ History distance_history(
     History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
     History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
 
-// Water flow rate (L/min) sampled once a minute from the pulse counter.
-// Same ring config as distance so the UI can reuse the same chart code.
+// Water consumption is recorded as one liter per meter pulse. Zero-value
+// markers distinguish an online interval with no use from missing history.
+// Use a new NVS namespace so old L/min history is not mixed with bucket totals.
 History water_history(
-    "water",
+    "water10",
     History::RingConfig{/*period_sec=*/600, /*slot_count=*/144, /*min_persist_sec=*/3600},
     History::RingConfig{/*period_sec=*/86400, /*slot_count=*/30, /*min_persist_sec=*/0});
 
-// Flow-rate sampler state. Every WATER_SAMPLE_MS we record the number of
-// pulses received in the last window as one L/min sample.
-static unsigned long last_water_sample_ms = 0;
-static uint32_t last_water_pulse_count = 0;
-constexpr unsigned long WATER_SAMPLE_MS = 60000;
+constexpr time_t HISTORY_SYNC_THRESHOLD = 1704067200;
+constexpr uint32_t WATER_HISTORY_PERIOD_SEC = 600;
+static uint32_t last_water_history_unit = UINT32_MAX;
+static uint32_t pending_water_history_liters = 0;
 
 // ---------------- Digital inputs (PCF8574 @ 0x26, /INT → GPIO12) ----------------
 
@@ -125,7 +125,6 @@ static void load_water_total()
     return;
   water_pulse_count = prefs.getUInt(WATER_TOTAL_NVS_KEY, 0);
   prefs.end();
-  last_water_pulse_count = water_pulse_count;
   wlog_printf("Water total restored: %u L", (unsigned)water_pulse_count);
 }
 
@@ -164,17 +163,14 @@ static void maybe_persist_water_total(unsigned long now)
 static bool set_water_total(uint32_t liters)
 {
   uint32_t previous_water_pulse_count = water_pulse_count;
-  uint32_t previous_last_water_pulse_count = last_water_pulse_count;
   bool previous_dirty = water_pulse_count_dirty;
 
   water_pulse_count = liters;
-  last_water_pulse_count = liters;
   water_pulse_count_dirty = true;
   bool ok = persist_water_total();
   if (!ok)
   {
     water_pulse_count = previous_water_pulse_count;
-    last_water_pulse_count = previous_last_water_pulse_count;
     water_pulse_count_dirty = previous_dirty;
     return false;
   }
@@ -233,6 +229,11 @@ static void poll_inputs(bool count_water_edges = true)
     {
       water_pulse_count++;
       water_pulse_count_dirty = true;
+      time_t now_epoch = time(nullptr);
+      if (now_epoch >= HISTORY_SYNC_THRESHOLD)
+        water_history.record(now_epoch, 1.0f);
+      else
+        pending_water_history_liters++;
     }
   }
   input_mask = mask;
@@ -462,9 +463,9 @@ static void server_handle_config()
 ///
 /// Returns `{"distance":{"short":...,"long":...},"water":{"short":...,"long":...}}`.
 /// Each ring is `{"period_sec":N,"buckets":[{"t":..,"min":..,"avg":..,"max":..,"n":..}, ...]}`;
-/// empty slots collapse to `{"t":..,"n":0}`. Water values are L/min sampled
-/// from the Input 1 pulse counter once per minute. Persisted to NVS, so the
-/// series survives reboots.
+/// empty slots collapse to `{"t":..,"n":0}`. Water buckets include `sum`,
+/// the exact liters consumed during each 10-minute or daily interval. History
+/// is persisted to NVS, so the series survives reboots.
 static void server_handle_history()
 {
   String json;
@@ -472,7 +473,7 @@ static void server_handle_history()
   json += "{\"distance\":";
   distance_history.serialize(json);
   json += ",\"water\":";
-  water_history.serialize(json);
+  water_history.serialize(json, /*include_sum=*/true);
   json += '}';
   server.send(200, "application/json", json);
 }
@@ -633,13 +634,16 @@ void loop()
     poll_inputs();
   }
   maybe_persist_water_total(now);
-  if (now - last_water_sample_ms >= WATER_SAMPLE_MS)
+  time_t now_epoch = time(nullptr);
+  if (now_epoch >= HISTORY_SYNC_THRESHOLD)
   {
-    last_water_sample_ms = now;
-    uint32_t delta = water_pulse_count - last_water_pulse_count;
-    last_water_pulse_count = water_pulse_count;
-    // One pulse = one liter; window is 60 s, so delta == L/min as a value.
-    water_history.record(time(nullptr), (float)delta);
+    uint32_t water_history_unit = (uint32_t)(now_epoch / WATER_HISTORY_PERIOD_SEC);
+    if (water_history_unit != last_water_history_unit)
+    {
+      water_history.record(now_epoch, (float)pending_water_history_liters);
+      pending_water_history_liters = 0;
+      last_water_history_unit = water_history_unit;
+    }
   }
   if (now - last_oled_ms >= OLED_REFRESH_MS)
   {

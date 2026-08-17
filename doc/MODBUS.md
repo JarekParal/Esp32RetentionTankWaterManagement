@@ -209,6 +209,9 @@ modbus:
 
 The History rings themselves roll over on `period_sec` boundaries:
 short ring at every 10 minutes UTC-aligned, long ring at midnight UTC.
+Water history records each one-liter pulse and graphs bucket sums: 10-minute
+totals for the 24-hour ring and daily totals for the 30-day ring. The
+independent flow-rate input register remains a 60-second L/min sample.
 
 ## Implementation notes
 

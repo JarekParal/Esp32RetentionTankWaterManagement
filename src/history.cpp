@@ -138,7 +138,7 @@ struct History::Ring
   }
 
   /// Emit bucket entries (no surrounding `[]`) to @p out, oldest first.
-  void serialize_buckets(String &out, uint32_t current_t_unit) const
+  void serialize_buckets(String &out, uint32_t current_t_unit, bool include_sum) const
   {
     if (!buckets)
       return;
@@ -156,10 +156,19 @@ struct History::Ring
       out += (uint32_t)(t * period_sec);
       if (b.n > 0 && b.t_unit == t)
       {
-        char tmp[64];
-        snprintf(tmp, sizeof(tmp),
-                 ",\"min\":%.2f,\"avg\":%.2f,\"max\":%.2f,\"n\":%u",
-                 b.min_v, b.sum_v / (float)b.n, b.max_v, (unsigned)b.n);
+        char tmp[128];
+        if (include_sum)
+        {
+          snprintf(tmp, sizeof(tmp),
+                   ",\"min\":%.2f,\"avg\":%.2f,\"max\":%.2f,\"sum\":%.2f,\"n\":%u",
+                   b.min_v, b.sum_v / (float)b.n, b.max_v, b.sum_v, (unsigned)b.n);
+        }
+        else
+        {
+          snprintf(tmp, sizeof(tmp),
+                   ",\"min\":%.2f,\"avg\":%.2f,\"max\":%.2f,\"n\":%u",
+                   b.min_v, b.sum_v / (float)b.n, b.max_v, (unsigned)b.n);
+        }
         out += tmp;
       }
       else
@@ -239,7 +248,7 @@ void History::record(time_t now_epoch, float value)
   }
 }
 
-void History::serialize(String &out) const
+void History::serialize(String &out, bool include_sum) const
 {
   const time_t now = time(nullptr);
   const bool synced = (now >= SYNC_THRESHOLD);
@@ -250,7 +259,7 @@ void History::serialize(String &out) const
   if (synced && short_ring_)
   {
     const uint32_t t = (uint32_t)(now / (time_t)short_ring_->period_sec);
-    short_ring_->serialize_buckets(out, t);
+    short_ring_->serialize_buckets(out, t, include_sum);
   }
   out += "]},\"long\":{\"period_sec\":";
   out += long_ring_ ? long_ring_->period_sec : 0u;
@@ -258,7 +267,7 @@ void History::serialize(String &out) const
   if (synced && long_ring_)
   {
     const uint32_t t = (uint32_t)(now / (time_t)long_ring_->period_sec);
-    long_ring_->serialize_buckets(out, t);
+    long_ring_->serialize_buckets(out, t, include_sum);
   }
   out += "]}}";
 }

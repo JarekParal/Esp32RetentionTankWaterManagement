@@ -9,7 +9,7 @@
 // tank.full_distance_cm. Kept hardcoded on purpose: parsing config.json on
 // the device would pull in a JSON library for two integers. If the values
 // in config.json change, update them here too.
-constexpr int OLED_TANK_EMPTY_CM = 140;
+constexpr int OLED_TANK_EMPTY_CM = 132;
 constexpr int OLED_TANK_FULL_CM = 20;
 
 // Full-framebuffer U8g2 driver for SSD1306 128x64 over hardware I2C.

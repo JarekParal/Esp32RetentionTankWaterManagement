@@ -84,9 +84,10 @@ public:
 
   /// @brief Sum of all sample values currently held in the short ring.
   ///        For the water meter this equals the total liters consumed in
-  ///        the short-ring window (L/min samples × 1 min each); for a
-  ///        spot signal like distance it's just a sum and rarely useful.
+  ///        the short-ring window (one sample per liter pulse); for a spot
+  ///        signal like distance it's just a sum and rarely useful.
   ///        Empty buckets contribute 0. Cheap — single pass over slot_count.
+  /// @return Sum of stored sample values; liters for the water history.
   float short_window_sum() const;
 
   /// @brief Append the signal's series as a JSON object value to @p out.
@@ -97,9 +98,13 @@ public:
   ///    {"t":1715472000,"min":..,"avg":..,"max":..,"n":..}, ... ]},
   ///  "long":{"period_sec":86400,"buckets":[ ... ]}}
   /// @endcode
+  /// When @p include_sum is true, each non-empty bucket also contains
+  /// `"sum":..` after `"max"`.
   /// Empty slots are emitted as `{"t":<unix_seconds>,"n":0}`. Bucket order
   /// is chronological, oldest first.
-  void serialize(String &out) const;
+  /// @param out Destination buffer; the JSON object is appended to it.
+  /// @param include_sum Include each non-empty bucket's exact sample sum.
+  void serialize(String &out, bool include_sum = false) const;
 
 private:
   struct Ring; // defined in history.cpp

@@ -18,7 +18,7 @@ void set_valve(int n, bool open);
 
 // Tank fill thresholds mirror oled.cpp / web/config.json. Kept duplicated by
 // intent so Modbus clients don't need to know how the % is computed.
-constexpr int MB_TANK_EMPTY_CM = 140;
+constexpr int MB_TANK_EMPTY_CM = 132;
 constexpr int MB_TANK_FULL_CM = 20;
 
 // Register addresses — see doc/MODBUS.md for the canonical table.

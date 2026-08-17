@@ -357,6 +357,10 @@
       text-transform: none;
       letter-spacing: 0;
     }
+    .chart-actions {
+      display: flex;
+      gap: 6px;
+    }
     .chart-title button {
       background: var(--panel2);
       color: var(--text);
@@ -371,6 +375,20 @@
     .chart-title button:hover { background: var(--panel); }
     .chart-title button.danger { color: #fff; background: #b91c1c; border-color: #991b1b; }
     .chart-title button.danger:hover { background: #991b1b; }
+    .chart-panel:fullscreen {
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      width: 100vw;
+      height: 100vh;
+      padding: 16px;
+      background: var(--bg);
+    }
+    .chart-panel:fullscreen .chart {
+      flex: 1;
+      min-height: 0;
+      aspect-ratio: auto;
+    }
     .chart {
       display: block;
       width: 100%;
@@ -477,19 +495,25 @@
     <section class="history" data-section="distance">
       <h2>Tank Distance</h2>
       <div class="history-grid">
-        <div>
+        <div class="chart-panel">
           <div class="chart-title">
             <span id="window-24h">Last 24 hours</span>
             <span class="range" id="range-24h">&mdash;</span>
-            <button id="clearShort" class="danger" type="button">Clear 24h</button>
+            <span class="chart-actions">
+              <button class="fullscreen-chart" type="button" aria-label="Show Last 24 hours graph full screen">Full screen</button>
+              <button id="clearShort" class="danger" type="button">Clear 24h</button>
+            </span>
           </div>
           <svg id="chart-24h" class="chart" viewBox="0 0 320 110"></svg>
         </div>
-        <div>
+        <div class="chart-panel">
           <div class="chart-title">
             <span id="window-30d">Last 30 days</span>
             <span class="range" id="range-30d">&mdash;</span>
-            <button id="clearLong" class="danger" type="button">Clear 30d</button>
+            <span class="chart-actions">
+              <button class="fullscreen-chart" type="button" aria-label="Show Last 30 days graph full screen">Full screen</button>
+              <button id="clearLong" class="danger" type="button">Clear 30d</button>
+            </span>
           </div>
           <svg id="chart-30d" class="chart" viewBox="0 0 320 110"></svg>
         </div>
@@ -499,19 +523,25 @@
     <section class="history" data-section="water">
       <h2>Water Consumption</h2>
       <div class="history-grid">
-        <div>
+        <div class="chart-panel">
           <div class="chart-title">
             <span id="water-window-24h">Last 24 hours</span>
             <span class="range" id="water-range-24h">&mdash;</span>
-            <button id="clearWaterShort" class="danger" type="button">Clear 24h</button>
+            <span class="chart-actions">
+              <button class="fullscreen-chart" type="button" aria-label="Show Last 24 hours water graph full screen">Full screen</button>
+              <button id="clearWaterShort" class="danger" type="button">Clear 24h</button>
+            </span>
           </div>
           <svg id="water-chart-24h" class="chart" viewBox="0 0 320 110"></svg>
         </div>
-        <div>
+        <div class="chart-panel">
           <div class="chart-title">
             <span id="water-window-30d">Last 30 days</span>
             <span class="range" id="water-range-30d">&mdash;</span>
-            <button id="clearWaterLong" class="danger" type="button">Clear 30d</button>
+            <span class="chart-actions">
+              <button class="fullscreen-chart" type="button" aria-label="Show Last 30 days water graph full screen">Full screen</button>
+              <button id="clearWaterLong" class="danger" type="button">Clear 30d</button>
+            </span>
           </div>
           <svg id="water-chart-30d" class="chart" viewBox="0 0 320 110"></svg>
         </div>
@@ -676,6 +706,11 @@
 
       function formatUptime(ms) {
         const totalSec = Math.floor(ms / 1000);
+        if (totalSec >= 86400) {
+          const days = Math.floor(totalSec / 86400);
+          const hours = Math.floor((totalSec % 86400) / 3600);
+          return `${days}d ${hours}h`;
+        }
         const h = Math.floor(totalSec / 3600);
         const m = Math.floor((totalSec % 3600) / 60);
         const s = totalSec % 60;
@@ -885,6 +920,12 @@
         // Project a bucket to the display unit; min/max may swap if transform
         // is inverse-monotonic (cm → fullness %).
         const project = b => {
+          if (opts.summarize) {
+            const value = transform(opts.summarize(b));
+            return { avg: value, lo: value, hi: value,
+                     n: b.n, t: b.t,
+                     rawMin: b.min, rawMax: b.max, rawAvg: b.avg };
+          }
           const a = transform(b.avg);
           const lo1 = transform(b.min), lo2 = transform(b.max);
           return { avg: a, lo: Math.min(lo1, lo2), hi: Math.max(lo1, lo2),
@@ -1112,14 +1153,16 @@
             ? date.toLocaleDateString()
             : date.toLocaleString([], { hour: '2-digit', minute: '2-digit',
                                         day: 'numeric', month: 'short' });
-          const lineAvg = `avg ${f.b.avg.toFixed(1)} ${unit}`;
+          const lineAvg = `${opts.summaryLabel || 'avg'} ${f.b.avg.toFixed(1)} ${unit}`;
           const lineRng = `${f.b.lo.toFixed(1)} – ${f.b.hi.toFixed(1)} ${unit}`;
           const lineN   = `n = ${f.b.n}`;
           const lineSec = useSecondary
             ? `${opts.secondaryFromPrimary(f.b.avg).toFixed(0)} ${opts.secondaryUnit || ''}`.trim()
             : null;
 
-          const lines = [timeLabel, lineAvg, lineRng, lineN];
+          const lines = [timeLabel, lineAvg];
+          if (opts.showRange !== false) lines.push(lineRng);
+          if (opts.showSamples !== false) lines.push(lineN);
           if (lineSec) lines.splice(2, 0, lineSec);
 
           const boxW = 56, lineH = 6;
@@ -1164,9 +1207,10 @@
         };
 
         const snapToBucket = clientX => {
-          const rect = svg.getBoundingClientRect();
-          if (rect.width === 0) return null;
-          const xUser = (clientX - rect.left) / rect.width * vbW;
+          const transform = svg.getScreenCTM();
+          if (!transform) return null;
+          const point = new DOMPoint(clientX, 0).matrixTransform(transform.inverse());
+          const xUser = point.x;
           if (xUser < plotX0 || xUser > plotX0 + plotW) return null;
           // Find filled bucket whose center is closest.
           let best = null, bestDx = Infinity;
@@ -1230,16 +1274,24 @@
           }
           const water = data?.water;
           if (water) {
-            // Flow-rate sample is L/min, recorded once a minute from the pulse counter.
-            renderChart($waterChart24h, $waterRange24h, $waterWindow24h, water.short, v => v, 'L/min');
-            renderChart($waterChart30d, $waterRange30d, $waterWindow30d, water.long,  v => v, 'L/min');
+            const consumptionOpts = {
+              summarize: bucket => Number.isFinite(bucket.sum) ? bucket.sum : bucket.avg * bucket.n,
+              summaryLabel: 'total',
+              showRange: false,
+              showSamples: false,
+            };
+            renderChart($waterChart24h, $waterRange24h, $waterWindow24h, water.short, v => v, 'L / 10 min', consumptionOpts);
+            renderChart($waterChart30d, $waterRange30d, $waterWindow30d, water.long,  v => v, 'L / day', consumptionOpts);
             // Total liters in the last 24 h = sum over short-ring buckets of
-            // (avg L/min × n samples). Each sample covers one minute, so that
-            // product is the literal liter count contributed by that bucket.
+            // their pulse-event sums. The avg × n fallback supports history
+            // responses from firmware built before the explicit sum field.
             if (water.short && Array.isArray(water.short.buckets)) {
               let total = 0;
               for (const b of water.short.buckets) {
-                if (b && b.n > 0 && Number.isFinite(b.avg)) total += b.avg * b.n;
+                if (b && b.n > 0) {
+                  if (Number.isFinite(b.sum)) total += b.sum;
+                  else if (Number.isFinite(b.avg)) total += b.avg * b.n;
+                }
               }
               $water24h.textContent = `${Math.round(total)} L`;
             }
@@ -1251,6 +1303,20 @@
         $terminal.textContent = '';
       });
       document.getElementById('closeAll').addEventListener('click', closeAll);
+      for (const button of document.querySelectorAll('.fullscreen-chart')) {
+        button.addEventListener('click', async () => {
+          const panel = button.closest('.chart-panel');
+          if (!panel) return;
+          if (document.fullscreenElement === panel) await document.exitFullscreen();
+          else await panel.requestFullscreen();
+        });
+      }
+      document.addEventListener('fullscreenchange', () => {
+        for (const button of document.querySelectorAll('.fullscreen-chart')) {
+          const active = document.fullscreenElement === button.closest('.chart-panel');
+          button.textContent = active ? 'Exit full screen' : 'Full screen';
+        }
+      });
       $setWaterTotal.addEventListener('click', openWaterTotalDialog);
       document.getElementById('cancelWaterTotal').addEventListener('click', () => {
         $waterTotalDialog.close();

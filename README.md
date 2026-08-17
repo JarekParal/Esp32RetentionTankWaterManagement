@@ -31,7 +31,7 @@ Wired Ethernet only — no Wi-Fi.
 - **Valves**: 8 outputs on a PCF8574 I²C expander at `0x24`. Controlled from the Web UI, Modbus, or HTTP.
 - **Inputs**: 8 inputs on a second PCF8574 at `0x26`, INT line wired to GPIO12 so polling is interrupt-driven, not timer-based.
 - **Tank level**: HC-SR04 ultrasonic, sampled every 10 s; persisted as a 24 h × 10 min and 30 d × 1 day min/avg/max history.
-- **Water meter**: Input 1 doubles as a 1 L/pulse counter. Per-minute flow rate is recorded into a second history ring identical in shape to the tank-distance one.
+- **Water meter**: Input 1 doubles as a 1 L/pulse counter. Each pulse is recorded into 10-minute and daily history buckets, whose sums are the actual consumption for those intervals.
 - **OLED**: 0.96" SSD1306 over the same I²C bus (`0x3C`) shows IP, uptime, tank cm + fill %, water L, valve+input mask, last log line.
 
 ---
@@ -99,7 +99,7 @@ Open `http://<device-ip>/`. Sections (foldable, state persists in localStorage):
 | Section | Content |
 | --- | --- |
 | Tank Distance | 24 h (10-min buckets) and 30 d (daily) min/avg/max charts; "Clear 24h" / "Clear 30d" buttons with two-step confirm |
-| Water Consumption | Same chart layout for L/min flow rate sampled every minute from the Input 1 pulse counter |
+| Water Consumption | Actual liters per interval: 10-minute totals across the last 24 hours and daily totals across the last 30 days |
 | Solenoid Valves | 8 toggle tiles + "Close all" |
 | Digital Inputs | 8 status tiles (read-only) |
 | Device Log | Live tail of the firmware's in-memory log buffer (60 lines) |
@@ -155,7 +155,7 @@ V:1.34..7. I:.2..5..               <- valve + input mask
 14:22:31 Valve 1 -> OPEN           <- last log line, HH:MM:SS prefix
 ```
 
-Layout and font choices live in [src/oled.cpp](src/oled.cpp). The fill-percent thresholds (`EMPTY_CM=140`, `FULL_CM=20`) are hardcoded there in sync with `web/config.json` — the firmware doesn't parse the JSON.
+Layout and font choices live in [src/oled.cpp](src/oled.cpp). The fill-percent thresholds (`EMPTY_CM=132`, `FULL_CM=20`) are hardcoded there in sync with `web/config.json` — the firmware doesn't parse the JSON.
 
 ---
 
@@ -166,7 +166,7 @@ Embedded into the firmware at build time and served as-is to the browser. The fi
 ```json
 {
   "title": "Retention Tank",
-  "tank": { "empty_distance_cm": 140, "full_distance_cm": 20 },
+  "tank": { "empty_distance_cm": 132, "full_distance_cm": 20 },
   "valves": [ { "name": "Valve 1", "note": "" }, ... ],
   "inputs": [ { "name": "Input 1", "note": "Water meter (1 L/pulse)" }, ... ]
 }
